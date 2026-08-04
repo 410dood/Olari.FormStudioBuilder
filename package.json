@@ -1,0 +1,49 @@
+{
+    "name": "olari.FormStudioBuilder",
+    "widgetName": "FormStudioBuilder",
+    "version": "0.2.0",
+    "description": "Mendix pluggable widget for designing, viewing, document output, and PDF-ready rendering of JSON forms with RJSF.",
+    "author": "Recovered from packaged widget",
+    "license": "MIT",
+    "engines": {
+        "node": ">=16"
+    },
+    "mxpackage": {
+        "name": "olari.FormStudioBuilder",
+        "type": "widget",
+        "mpkName": "olari.FormStudioBuilder.mpk"
+    },
+    "packagePath": "olari",
+    "scripts": {
+        "start": "pluggable-widgets-tools start:server",
+        "dev": "pluggable-widgets-tools start:web",
+        "build": "pluggable-widgets-tools build:web",
+        "lint": "pluggable-widgets-tools lint",
+        "lint:fix": "pluggable-widgets-tools lint:fix",
+        "release": "pluggable-widgets-tools release:web"
+    },
+    "dependencies": {
+        "@rjsf/core": "^6.3.1",
+        "@rjsf/validator-ajv8": "^6.3.1"
+    },
+    "devDependencies": {
+        "@mendix/pluggable-widgets-tools": "^11.3.1",
+        "@rollup/plugin-json": "^6.1.0",
+        "rollup": "^3.29.4"
+    },
+    "resolutions": {
+        "react": "^18.2.0",
+        "@types/react": "^18.2.0",
+        "react-native": "0.72.7"
+    },
+    "overrides": {
+        "react": "^18.2.0",
+        "@types/react": "^18.2.0",
+        "react-native": "0.72.7"
+    },
+    "config": {
+        "projectPath": "C:\\\\Users\\\\willi\\\\Mendix\\\\Olari-main",
+        "mendixHost": "http://localhost:8080",
+        "developmentPort": 3002
+    }
+}

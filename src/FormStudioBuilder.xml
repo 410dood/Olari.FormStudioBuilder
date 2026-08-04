@@ -1,0 +1,370 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<widget id="olari.formstudiobuilder.FormStudioBuilder" pluginWidget="true" needsEntityContext="true" offlineCapable="true" supportedPlatform="Web"
+    xmlns="http://www.mendix.com/widget/1.0/"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mendix.com/widget/1.0/ ../node_modules/mendix/custom_widget.xsd">
+    <name>FormStudio Builder (Next)</name>
+    <description>Next-gen redesign of RjsfFormBuilder. Form.io-style JSON form designer, viewer, document-output builder, and PDF-ready renderer powered by RJSF.</description>
+    <properties>
+        <property key="viewerHeaderWidget" type="widgets" required="false">
+            <caption>Viewer header widget</caption>
+            <category>Behavior</category>
+            <description>Optional Mendix widget rendered in viewer mode before the Save button.</description>
+        </property>
+        <property key="dataSource" type="object" isList="true" required="false">
+            <caption>Form context</caption>
+            <category>Data</category>
+            <description>Single-object datasource that stores form definition and values.</description>
+            <properties>
+                <property key="formDefinitionAttr" type="attribute" required="true">
+                    <caption>Form definition JSON</caption>
+                    <category>Data</category>
+                    <description>String/LongString attribute that stores the builder definition JSON.</description>
+                    <attributeTypes>
+                        <attributeType name="String" />
+                    </attributeTypes>
+                </property>
+                <property key="formTitleAttr" type="attribute" required="false">
+                    <caption>Form title</caption>
+                    <category>Data</category>
+                    <description>Optional attribute to store the current form title.</description>
+                    <attributeTypes>
+                        <attributeType name="String" />
+                    </attributeTypes>
+                </property>
+                <property key="formDescriptionAttr" type="attribute" required="false">
+                    <caption>Form description</caption>
+                    <category>Data</category>
+                    <description>Optional attribute to store the current form description.</description>
+                    <attributeTypes>
+                        <attributeType name="String" />
+                    </attributeTypes>
+                </property>
+                <property key="tokenContextJsonAttr" type="attribute" required="false">
+                    <caption>Token context JSON</caption>
+                    <category>Data</category>
+                    <description>Optional String/LongString JSON object of runtime token values (key/value pairs) used when resolving document output templates.</description>
+                    <attributeTypes>
+                        <attributeType name="String" />
+                    </attributeTypes>
+                </property>
+                <property key="snippetsJsonAttr" type="attribute" required="false">
+                    <caption>Snippets JSON</caption>
+                    <category>Data</category>
+                    <description>Optional String/LongString JSON array of canned-text snippets ([{id,name,text,scope}]) offered on text/textarea fields in viewer fill mode. Empty or invalid JSON disables the feature.</description>
+                    <attributeTypes>
+                        <attributeType name="String" />
+                    </attributeTypes>
+                </property>
+                <property key="tokenCatalogSchemaJsonAttr" type="attribute" required="false">
+                    <caption>Token catalog schema JSON</caption>
+                    <category>Data</category>
+                    <description>Optional String/LongString JSON schema/catalog used only by the builder token picker (Client Data). This defines available token keys and labels, but does not provide runtime values.</description>
+                    <attributeTypes>
+                        <attributeType name="String" />
+                    </attributeTypes>
+                </property>
+                <property key="systemTemplatesConfigJsonAttr" type="attribute" required="false">
+                    <caption>System templates config JSON</caption>
+                    <category>Data</category>
+                    <description>Optional String/LongString JSON array of extra system template definitions ({type,label,keyBase?,slotProperty?,rowIdKey?,documentOutputTemplate?,columns:[{key,label,type?,required?,columnSpan?,options?}]}). They appear in the designer toolbox next to the built-in templates; at runtime their slot renders HTML supplied via the system section HTML JSON keyed by slotProperty.</description>
+                    <attributeTypes>
+                        <attributeType name="String" />
+                    </attributeTypes>
+                </property>
+                <property key="resolvedOutputHtmlAttr" type="attribute" required="false">
+                    <caption>Resolved output HTML</caption>
+                    <category>Data</category>
+                    <description>Optional String/LongString attribute to store rendered token-replaced output on save.</description>
+                    <attributeTypes>
+                        <attributeType name="String" />
+                    </attributeTypes>
+                </property>
+                <property key="resolvedPdfHtmlAttr" type="attribute" required="false">
+                    <caption>Resolved PDF HTML</caption>
+                    <category>Data</category>
+                    <description>Optional String/LongString attribute to store full print-ready HTML for server-side PDF conversion.</description>
+                    <attributeTypes>
+                        <attributeType name="String" />
+                    </attributeTypes>
+                </property>
+                <property key="systemSectionHtmlJsonAttr" type="attribute" required="false">
+                    <caption>System section HTML JSON</caption>
+                    <category>Data</category>
+                    <description>Optional String/LongString JSON object keyed by system template slot property. Each value should contain print-ready HTML to inject into the PDF output for that system section.</description>
+                    <attributeTypes>
+                        <attributeType name="String" />
+                    </attributeTypes>
+                </property>
+                <property key="formDataAttr" type="attribute" required="false">
+                    <caption>Form data JSON</caption>
+                    <category>Data</category>
+                    <description>Optional String/LongString attribute to store form values.</description>
+                    <attributeTypes>
+                        <attributeType name="String" />
+                    </attributeTypes>
+                </property>
+                <property key="formSchemaAttr" type="attribute" required="false">
+                    <caption>Derived schema JSON</caption>
+                    <category>Data</category>
+                    <description>Optional attribute to store generated JSON Schema.</description>
+                    <attributeTypes>
+                        <attributeType name="String" />
+                    </attributeTypes>
+                </property>
+                <property key="formUiSchemaAttr" type="attribute" required="false">
+                    <caption>Derived uiSchema JSON</caption>
+                    <category>Data</category>
+                    <description>Optional attribute to store generated RJSF uiSchema.</description>
+                    <attributeTypes>
+                        <attributeType name="String" />
+                    </attributeTypes>
+                </property>
+                <property key="fieldCountAttr" type="attribute" required="false">
+                    <caption>Field count</caption>
+                    <category>Data</category>
+                    <description>Output attribute: total number of fields in the form. Updated live.</description>
+                    <attributeTypes>
+                        <attributeType name="Integer" />
+                    </attributeTypes>
+                </property>
+                <property key="requiredFieldCountAttr" type="attribute" required="false">
+                    <caption>Required field count</caption>
+                    <category>Data</category>
+                    <description>Output attribute: number of required fields. Updated live.</description>
+                    <attributeTypes>
+                        <attributeType name="Integer" />
+                    </attributeTypes>
+                </property>
+                <property key="sectionCountAttr" type="attribute" required="false">
+                    <caption>Section count</caption>
+                    <category>Data</category>
+                    <description>Output attribute: number of distinct sections. Updated live.</description>
+                    <attributeTypes>
+                        <attributeType name="Integer" />
+                    </attributeTypes>
+                </property>
+                <property key="completionPercentAttr" type="attribute" required="false">
+                    <caption>Completion percent</caption>
+                    <category>Data</category>
+                    <description>Output attribute: percentage (0–100) of trackable fields that have a value. Updated live.</description>
+                    <attributeTypes>
+                        <attributeType name="Integer" />
+                    </attributeTypes>
+                </property>
+                <property key="onChangeAction" type="action" required="false">
+                    <caption>On change</caption>
+                    <category>Events</category>
+                    <description>Runs when definition or form data changes.</description>
+                </property>
+                <property key="onSaveAction" type="action" required="false">
+                    <caption>On save</caption>
+                    <category>Events</category>
+                    <description>Runs when Save button is clicked.</description>
+                </property>
+                <property key="onExportPdfAction" type="action" required="false">
+                    <caption>On export PDF</caption>
+                    <category>Events</category>
+                    <description>Runs when the viewer Export PDF button is clicked after refreshed HTML output has been written.</description>
+                </property>
+                <property key="onManageSnippets" type="action" required="false">
+                    <caption>On manage snippets</caption>
+                    <category>Events</category>
+                    <description>Optional action invoked by the Manage library link in the snippets popover. When unset the link is hidden.</description>
+                </property>
+                <property key="publishFieldKeyAttr" type="attribute" required="false">
+                    <caption>Publish field key</caption>
+                    <category>Data</category>
+                    <description>Output attribute: receives the field key when the designer's "Publish as shared field" button is clicked, just before On publish field runs.</description>
+                    <attributeTypes>
+                        <attributeType name="String" />
+                    </attributeTypes>
+                </property>
+                <property key="onPublishFieldAction" type="action" required="false">
+                    <caption>On publish field</caption>
+                    <category>Events</category>
+                    <description>Runs after Publish field key is written; wire to a microflow that registers the field as a shared token. When unset the designer button is hidden.</description>
+                </property>
+            </properties>
+        </property>
+        <property key="tokenContextSource" type="datasource" isList="true" required="false">
+            <caption>Token context datasource</caption>
+            <category>Data</category>
+            <description>Optional runtime datasource returning token key/value rows. Used to resolve token values in document output templates.</description>
+        </property>
+        <property key="tokenContextKeyAttr" type="attribute" dataSource="tokenContextSource" required="false">
+            <caption>Token key attribute</caption>
+            <category>Data</category>
+            <description>Attribute containing runtime token key names (for example: ClientFirstName, ClientDOB).</description>
+            <attributeTypes>
+                <attributeType name="String" />
+                <attributeType name="Enum" />
+                <attributeType name="Integer" />
+                <attributeType name="Long" />
+                <attributeType name="AutoNumber" />
+            </attributeTypes>
+        </property>
+        <property key="tokenContextValueAttr" type="attribute" dataSource="tokenContextSource" required="false">
+            <caption>Token value attribute</caption>
+            <category>Data</category>
+            <description>Attribute containing runtime token values for each key row.</description>
+            <attributeTypes>
+                <attributeType name="String" />
+                <attributeType name="Enum" />
+                <attributeType name="Integer" />
+                <attributeType name="Long" />
+                <attributeType name="AutoNumber" />
+                <attributeType name="Decimal" />
+                <attributeType name="Boolean" />
+                <attributeType name="DateTime" />
+            </attributeTypes>
+        </property>
+
+        <property key="viewMode" type="enumeration" defaultValue="designer" required="true">
+            <caption>View mode</caption>
+            <category>Behavior</category>
+            <description>Designer for building forms, Viewer for end-user form entry.</description>
+            <enumerationValues>
+                <enumerationValue key="designer">Designer</enumerationValue>
+                <enumerationValue key="viewer">Viewer</enumerationValue>
+            </enumerationValues>
+        </property>
+
+        <property key="showPalettePanel" type="expression" required="false">
+            <caption>Show palette panel</caption>
+            <category>Designer</category>
+            <description>Show/hide the field palette. Defaults to true.</description>
+            <returnType type="Boolean"/>
+        </property>
+
+        <property key="showComponentsPanel" type="expression" required="false">
+            <caption>Show components panel</caption>
+            <category>Designer</category>
+            <description>Show/hide the designer component list. In viewer mode this enables the left navigation panel, which can host section progress chips when the section panel is also enabled. Defaults to true.</description>
+            <returnType type="Boolean"/>
+        </property>
+
+        <property key="showSectionPanel" type="expression" required="false">
+            <caption>Show section panel</caption>
+            <category>Designer</category>
+            <description>Show/hide section navigation shortcuts. In viewer mode these render as section progress chips in the left navigation panel. Defaults to true.</description>
+            <returnType type="Boolean"/>
+        </property>
+
+        <property key="showPropertiesPanel" type="expression" required="false">
+            <caption>Show properties panel</caption>
+            <category>Designer</category>
+            <description>Show/hide component property editor. Defaults to true.</description>
+            <returnType type="Boolean"/>
+        </property>
+
+        <property key="showPreviewPanel" type="expression" required="false">
+            <caption>Show preview panel</caption>
+            <category>Designer</category>
+            <description>Show/hide live RJSF preview. Defaults to true.</description>
+            <returnType type="Boolean"/>
+        </property>
+
+        <property key="showLayoutTools" type="expression" required="false">
+            <caption>Show layout tools</caption>
+            <category>Designer</category>
+            <description>Show/hide layout templates in the palette. Defaults to true.</description>
+            <returnType type="Boolean"/>
+        </property>
+
+        <property key="showViewerHeader" type="expression" required="false">
+            <caption>Show viewer header</caption>
+            <category>Behavior</category>
+            <description>Show/hide the viewer header row that contains the form title, optional header widget, and save/export actions. Defaults to true.</description>
+            <returnType type="Boolean"/>
+        </property>
+
+        <property key="showDocumentPreview" type="expression" required="false">
+            <caption>Show document preview</caption>
+            <category>Behavior</category>
+            <description>Viewer only: when this expression is true, render the resolved document output (narrative) instead of the fill form.</description>
+            <returnType type="Boolean"/>
+        </property>
+
+        <property key="previewFlow" type="enumeration" defaultValue="cards">
+            <caption>Preview flow</caption>
+            <category>Behavior</category>
+            <description>Viewer only: how the document preview renders. Cards keeps the bordered per-section card. Continuous strips the card chrome and adds a large typographic section heading so consecutive section widgets read as one flowed document.</description>
+            <enumerationValues>
+                <enumerationValue key="cards">Cards</enumerationValue>
+                <enumerationValue key="continuous">Continuous</enumerationValue>
+            </enumerationValues>
+        </property>
+
+        <property key="activeMedicationsDatagrid2" type="widgets" required="false">
+            <caption>Active Medications Datagrid2</caption>
+            <category>System templates</category>
+            <description>Mendix widget for Active Medications system template placeholder.</description>
+        </property>
+
+        <property key="activeAllergiesDatagrid2" type="widgets" required="false">
+            <caption>Active Allergies Datagrid2</caption>
+            <category>System templates</category>
+            <description>Mendix widget for Active Allergies system template placeholder.</description>
+        </property>
+
+        <property key="chartDiagnosisDatagrid2" type="widgets" required="false">
+            <caption>Chart Diagnosis Datagrid2</caption>
+            <category>System templates</category>
+            <description>Mendix widget for Chart Diagnosis system template placeholder.</description>
+        </property>
+
+        <property key="billingDiagnosisDatagrid2" type="widgets" required="false">
+            <caption>Billing Diagnosis Datagrid2</caption>
+            <category>System templates</category>
+            <description>Mendix widget for Billing Diagnosis system template placeholder.</description>
+        </property>
+
+        <property key="activeBillingCodesDatagrid2" type="widgets" required="false">
+            <caption>Active Billing Codes Datagrid2</caption>
+            <category>System templates</category>
+            <description>Mendix widget for Active Billing Codes system template placeholder.</description>
+        </property>
+
+        <property key="recentDrugTestDatagrid2" type="widgets" required="false">
+            <caption>Most Recent Drug Test Datagrid2</caption>
+            <category>System templates</category>
+            <description>Mendix widget for Most Recent Drug Test system template placeholder.</description>
+        </property>
+
+        <property key="viewerThemePreset" type="enumeration" defaultValue="clean" required="true">
+            <caption>Viewer theme preset</caption>
+            <category>Behavior</category>
+            <description>Visual preset for end-user form entry mode.</description>
+            <enumerationValues>
+                <enumerationValue key="clean">Clean</enumerationValue>
+                <enumerationValue key="compact">Compact</enumerationValue>
+                <enumerationValue key="contrast">High contrast</enumerationValue>
+                <enumerationValue key="mendix">Mendix style</enumerationValue>
+            </enumerationValues>
+        </property>
+
+        <property key="formLiveValidate" type="expression" required="false">
+            <caption>Live validate</caption>
+            <category>Behavior</category>
+            <description>Enable live validation while users type. Defaults to false.</description>
+            <returnType type="Boolean"/>
+        </property>
+
+        <property key="saveButtonText" type="string" required="false">
+            <caption>Save button text</caption>
+            <category>Behavior</category>
+            <description>Custom text for Save action button.</description>
+        </property>
+
+        <property key="exportPdfButtonText" type="string" required="false">
+            <caption>Export PDF button text</caption>
+            <category>Behavior</category>
+            <description>Custom text for the viewer Export PDF action button.</description>
+        </property>
+
+
+
+        <systemProperty key="Editability" />
+    </properties>
+</widget>
+
