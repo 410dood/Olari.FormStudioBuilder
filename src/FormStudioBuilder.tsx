@@ -145,6 +145,7 @@ interface DataSourceItem {
   tokenCatalogSchemaJsonAttr?: EditableValue<string>;
   systemTemplatesConfigJsonAttr?: EditableValue<string>;
   systemSectionHtmlJsonAttr?: EditableValue<string>;
+  systemSectionDataJsonAttr?: EditableValue<string>;
   resolvedOutputHtmlAttr?: EditableValue<string>;
   resolvedPdfHtmlAttr?: EditableValue<string>;
   formDataAttr?: EditableValue<string>;
@@ -1599,6 +1600,73 @@ function parseSystemSectionHtmlJson(raw?: string): Record<string, string> {
         }
       }
     );
+    return next;
+  } catch (_error) {
+    return {};
+  }
+}
+// System sections as DATA rows (redesign step 3). The server ships
+// {slotKey: {title?, columns, rows, emptyText?, meta?}} and the widget renders
+// the table itself — every cell goes through escapeHtml, so injection is
+// impossible by construction. Emits the same fs-live-vitals markup/classes the
+// legacy server HTML used, so existing styling and the PDF pipeline are
+// unchanged. Slots present here OVERRIDE the legacy HTML JSON.
+function renderSystemSectionDataToHtml(raw?: string): Record<string, string> {
+  if (!clean(raw)) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(raw as string);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+    const next: Record<string, string> = {};
+    Object.entries(parsed as Record<string, unknown>).forEach(([key, value]) => {
+      const normalizedKey = clean(key);
+      if (
+        !normalizedKey ||
+        !value ||
+        typeof value !== "object" ||
+        Array.isArray(value)
+      ) {
+        return;
+      }
+      const record = value as Record<string, unknown>;
+      const title = clean(record.title);
+      const emptyText = clean(record.emptyText) || "No data";
+      const meta = clean(record.meta);
+      const columns = Array.isArray(record.columns)
+        ? (record.columns as unknown[]).map((c) => escapeHtml(String(c ?? "")))
+        : [];
+      const rows = Array.isArray(record.rows)
+        ? (record.rows as unknown[]).filter((r) => Array.isArray(r))
+        : [];
+      let body: string;
+      if (!rows.length) {
+        body = `<div class=fs-vitals-empty>${escapeHtml(emptyText)}</div>`;
+      } else {
+        const header = columns.length
+          ? `<tr>${columns.map((c) => `<th>${c}</th>`).join("")}</tr>`
+          : "";
+        const bodyRows = rows
+          .map(
+            (r) =>
+              `<tr>${(r as unknown[])
+                .map((cell) => `<td>${escapeHtml(String(cell ?? ""))}</td>`)
+                .join("")}</tr>`
+          )
+          .join("");
+        body = `<table class=fs-vitals-table>${header}${bodyRows}</table>`;
+      }
+      const html =
+        `<div class=fs-live-vitals>` +
+        (title ? `<div class=fs-vitals-title>${escapeHtml(title)}</div>` : "") +
+        body +
+        (meta ? `<div class=fs-vitals-meta>${escapeHtml(meta)}</div>` : "") +
+        `</div>`;
+      next[normalizedKey] = html;
+      next[normalizedKey.toLowerCase()] = html;
+    });
     return next;
   } catch (_error) {
     return {};
@@ -8856,8 +8924,15 @@ export default function FormStudioBuilder(
     [tokenContextFromJson, tokenContextFromDatasource]
   );
   const systemSectionHtmlBySlot = useMemo(
-    () => parseSystemSectionHtmlJson(source?.systemSectionHtmlJsonAttr?.value),
-    [source?.systemSectionHtmlJsonAttr?.value]
+    () => ({
+      // Legacy server-rendered HTML first; data-rows slots override it.
+      ...parseSystemSectionHtmlJson(source?.systemSectionHtmlJsonAttr?.value),
+      ...renderSystemSectionDataToHtml(source?.systemSectionDataJsonAttr?.value)
+    }),
+    [
+      source?.systemSectionHtmlJsonAttr?.value,
+      source?.systemSectionDataJsonAttr?.value
+    ]
   );
   const tokenCatalog = useMemo(() => {
     // Datasource wins when configured; the JSON attribute is the deprecated

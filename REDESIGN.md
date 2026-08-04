@@ -45,11 +45,20 @@ produce/consume JSON. The redesign makes the widget speak Mendix natively.
    DocumentViewer with a file-type prop; do that swap in Studio Pro, NOT via pg_patch (known wipe
    hazard). Datasource: ctx = FormDocument data view → DS_Snippet_ForDocument. After wiring +
    verification, SUB_FormDocument_BuildSnippetsJson and FormDocument.SnippetsJson are retirable.
-3. System sections as data, not HTML — server currently ships hand-escaped HTML inside
-   SystemSectionHtmlJson. The widget already supports per-slot Mendix widget containers
-   (activeMedicationsDatagrid2 etc.) — prefer those everywhere; for PDF output, accept ROWS
-   (JSON data: columns+values) and render the table in React. Kills the 5 copy-paste
-   SUB_SystemHtml_* microflows and the injection class permanently.
+3. ✅ WIDGET DONE (0.2.0, 2026-08-04) System sections as data, not HTML — new Form-context
+   attribute `systemSectionDataJsonAttr` (appended at END of the nested property list; ordering
+   rule). Contract: {slotKey: {title?, columns:[...], rows:[[cell,...]], emptyText?, meta?}}.
+   The widget renders the table itself — every cell/title/meta goes through escapeHtml, so
+   injection is impossible by construction — and emits the SAME fs-live-vitals/fs-vitals-table
+   markup+classes as the legacy server HTML, so styling and the PDF pipeline are untouched.
+   Per-slot precedence: data slots OVERRIDE systemSectionHtmlJsonAttr slots; both may coexist
+   during migration.
+   SERVER NOT YET BUILT (deliberate): a SUB_FormDocument_BuildSystemSectionData producing the rows
+   contract replaces the 5 SUB_SystemHtml_* builders — but building it now would mean maintaining
+   both paths with no consumer; it lands WITH the viewer-page swap milestone (Form_Editor_Tabs swap
+   must happen in Studio Pro — DocumentViewer file-prop hazard). Until then the escaping-hardened
+   HTML builders remain the live path. UNTESTED at runtime for the same reason (no viewer page runs
+   this widget); logic is TS-checked and mirrors the legacy markup exactly.
 4. Versioned DefinitionJson contract — treat "version" as a real contract; bump on shape changes;
    emit a flat fields manifest (key/type/label/required/options/tokenKey/section/sectionOrder)
    alongside the component tree so FormStudio.SUB_TemplateFields_Snapshot becomes a trivial loop

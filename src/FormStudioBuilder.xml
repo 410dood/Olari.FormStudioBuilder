@@ -184,6 +184,14 @@
                     <category>Events</category>
                     <description>Runs after Publish field key is written; wire to a microflow that registers the field as a shared token. When unset the designer button is hidden.</description>
                 </property>
+                <property key="systemSectionDataJsonAttr" type="attribute" required="false">
+                    <caption>System section data JSON</caption>
+                    <category>Data</category>
+                    <description>Preferred over System section HTML JSON. JSON object keyed by system template slot property; each value is {title?, columns:[...], rows:[[cell,...],...], emptyText?, meta?}. The widget renders the table itself with full HTML escaping. Slots present here override the HTML JSON.</description>
+                    <attributeTypes>
+                        <attributeType name="String" />
+                    </attributeTypes>
+                </property>
             </properties>
         </property>
         <property key="tokenContextSource" type="datasource" isList="true" required="false">
