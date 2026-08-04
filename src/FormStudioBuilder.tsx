@@ -184,6 +184,7 @@ export interface FormStudioBuilderProps {
   snippetNameAttr?: ListAttributeValue<string>;
   snippetTextAttr?: ListAttributeValue<string>;
   snippetScopeAttr?: ListAttributeValue<string>;
+  toastMessageAttr?: EditableValue<string>;
   viewMode?: ViewMode;
   showPalettePanel?: boolean | DynamicValue<boolean>;
   showComponentsPanel?: boolean | DynamicValue<boolean>;
@@ -8727,6 +8728,73 @@ function SnippetsLayer(props: SnippetsLayerProps): ReactElement | null {
     document.body
   );
 }
+// Redesign step 5: widget-native toasts. Microflows keep writing
+// 'text|success|timestamp' to the toast attribute, but the widget displays and
+// clears it itself — no page-level JS relay, and timestamp dedupe kills the
+// double-toast class. Type segment: success | error | info (default info).
+interface WidgetToast {
+  id: string;
+  text: string;
+  kind: "success" | "error" | "info";
+}
+function WidgetToasts({ attr }: { attr?: EditableValue<string> }): ReactElement | null {
+  const [toasts, setToasts] = useState<WidgetToast[]>([]);
+  const seenRef = useRef<Set<string>>(new Set());
+  const raw = attr && attr.status === "available" ? clean(attr.value) : "";
+  useEffect(() => {
+    if (!raw) {
+      return;
+    }
+    const parts = raw.split("|");
+    const text = clean(parts[0]);
+    const kindRaw = clean(parts[1]).toLowerCase();
+    const stamp = clean(parts[2]) || raw;
+    if (!text) {
+      return;
+    }
+    const seenKey = `fsb-toast-${stamp}-${text}`;
+    let alreadyShown = seenRef.current.has(seenKey);
+    try {
+      alreadyShown = alreadyShown || sessionStorage.getItem(seenKey) === "1";
+      sessionStorage.setItem(seenKey, "1");
+    } catch (_error) {
+      // sessionStorage unavailable — ref dedupe still applies.
+    }
+    seenRef.current.add(seenKey);
+    if (alreadyShown) {
+      return;
+    }
+    const kind: WidgetToast["kind"] =
+      kindRaw === "success" || kindRaw === "error" ? (kindRaw as WidgetToast["kind"]) : "info";
+    const id = `${seenKey}-${Math.random().toString(36).slice(2)}`;
+    setToasts((current) => [...current, { id, text, kind }]);
+    // Deliberately NOT clearing the attribute: writing back marks the context
+    // object dirty and re-triggers change machinery (observed double-toast).
+    // Timestamp dedupe (ref + sessionStorage) prevents any re-fire instead.
+    const timer = window.setTimeout(() => {
+      setToasts((current) => current.filter((t) => t.id !== id));
+    }, 4500);
+    return () => window.clearTimeout(timer);
+  }, [raw, attr]);
+  if (!toasts.length) {
+    return null;
+  }
+  return (
+    <div className="rjsf-builder__toasts" role="status" aria-live="polite">
+      {toasts.map((toast) => (
+        <div
+          key={toast.id}
+          className={`rjsf-builder__toast rjsf-builder__toast--${toast.kind}`}
+          onClick={() =>
+            setToasts((current) => current.filter((t) => t.id !== toast.id))
+          }
+        >
+          {toast.text}
+        </div>
+      ))}
+    </div>
+  );
+}
 export default function FormStudioBuilder(
   props: FormStudioBuilderProps
 ): ReactElement {
@@ -11623,6 +11691,7 @@ export default function FormStudioBuilder(
   }
   return (
     <div className={className} style={props.style} tabIndex={props.tabIndex}>
+      <WidgetToasts attr={props.toastMessageAttr} />
       {" "}
       {!isViewer || showViewerHeader ? (
         <div className="rjsf-builder__toolbar">

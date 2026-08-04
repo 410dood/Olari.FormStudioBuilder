@@ -474,6 +474,15 @@
             </attributeTypes>
         </property>
 
+        <property key="toastMessageAttr" type="attribute" required="false">
+            <caption>Toast message</caption>
+            <category>Behavior</category>
+            <description>Optional toast channel on the context entity: microflows write 'text|success|timestamp' (or |error|/|info|) and the widget shows the toast itself, deduped by timestamp, then clears the value. Replaces page-level JS toast relays.</description>
+            <attributeTypes>
+                <attributeType name="String" />
+            </attributeTypes>
+        </property>
+
         <systemProperty key="Editability" />
     </properties>
 </widget>

@@ -69,8 +69,20 @@ produce/consume JSON. The redesign makes the widget speak Mendix natively.
    datagrid-column keys or double counting; a manifest-bearing draft snapshotted 18 rows on the old
    parser, exactly 9 on the new one; 43 legacy versions unchanged at 1571 rows). Full version bump
    of "version" deferred until a real shape change.
-5. Kill the LastToastMessage side-channel — use proper action props + a transient message; the
-   'text|success|timestamp' attribute bus caused the double-toast bug and pollutes FormDocument rows.
+5. ✅ MOSTLY DONE (0.2.0, 2026-08-04) Widget-native toasts — top-level `toastMessageAttr`
+   (Behavior; bound to the context entity's LastToastMessage): the widget parses
+   'text|success|timestamp' (|error|/|info|), renders its own toast stack
+   (.rjsf-builder__toasts, click-to-dismiss, 4.5s auto-hide), dedupes by timestamp via ref +
+   sessionStorage, and does NOT write the attribute back (clearing marks the context object dirty
+   and re-triggers change machinery — observed as a double toast; dedupe alone is the fix).
+   WIRED on Template_Designer (toastMessageAttr → FormTemplateVersion.LastToastMessage) and the
+   page's jsToastRelay JS-snippet widget is REMOVED. Runtime-verified 'Template saved' renders from
+   the widget; the double-fire was reproduced and fixed (final single-toast retest pending next
+   deploy). NOTE the attribute channel itself remains (Mendix has no other microflow→widget push);
+   the side-channel is now contained: no page JS, one display path, dedupe enforced.
+   WIRING NOTE: top-level widget-object keys persist via pg_patch ONLY after Studio Pro has loaded
+   the new .mpk — F5 (build+run) is the reliable reload; F4 and App→Tools→Update Widgets were NOT
+   sufficient/verified for this (see Bill's correction 2026-08-04).
 6. Formalize AnswersJson — document + runtime-assert: flat map, string values, stable key charset,
    documented multi-select encoding. Server (FormAnswer materialization + carry-forward probes)
    depends on this shape.

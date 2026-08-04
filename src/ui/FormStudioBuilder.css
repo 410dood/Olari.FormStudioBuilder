@@ -3221,3 +3221,32 @@
   padding: 8px 0 16px;
   text-align: left;
 }
+
+/* Redesign step 5: widget-native toasts (replaces page JS toast relays). */
+.rjsf-builder__toasts {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 360px;
+}
+.rjsf-builder__toast {
+  padding: 10px 14px;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 13px;
+  line-height: 1.4;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+  animation: rjsf-toast-in 0.25s ease-out;
+}
+.rjsf-builder__toast--success { background: #2e7d32; }
+.rjsf-builder__toast--error { background: #c62828; }
+.rjsf-builder__toast--info { background: #1565c0; }
+@keyframes rjsf-toast-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
