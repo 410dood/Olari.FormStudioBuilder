@@ -11,9 +11,16 @@ count drift) lived on the server side of that contract because microflows are a 
 produce/consume JSON. The redesign makes the widget speak Mendix natively.
 
 ## Iteration plan (in order)
-1. Token catalog via datasource — replace tokenCatalogSchemaJsonAttr with a TokenDef datasource
-   (key/label/fieldType/defaultLabel/options/canonical attrs). Server deletes SUB_Tokens_BuildCatalogJson.
-   Keep the JSON attr as deprecated fallback during migration.
+1. ✅ DONE (0.2.0, commit b533f20) Token catalog via datasource — `tokenCatalogSource` + key/label/
+   kind/fieldType/defaultLabel/optionsJson/canonical/sourcePath attrs. `tokenCatalogSchemaJsonAttr`
+   is now a deprecated fallback, used only when the datasource is absent/unavailable (an empty
+   datasource is a real empty catalog and does NOT fall back). Kind accepts widget kinds
+   (client/doc/computed/sharedField) or Mendix TokenSourceType names (Computed/DerivedFromEntity/
+   FormAnswer/UserEntered), else is derived from the key prefix. Server side: `FormStudio.
+   DS_TokenDef_Catalog` (active TokenDefs, Category+DisplayName sort, User+Admin) added — wire it to
+   the widget's Token catalog datasource, mapping Catalog: source path → TokenDef.SourcePath.
+   NOT YET DONE: wiring on a page + runtime verification; only then can
+   SUB_Tokens_BuildCatalogJson be retired.
 2. Snippets via datasource — same treatment for snippetsJsonAttr (Snippet datasource: id/name/text/scope).
 3. System sections as data, not HTML — server currently ships hand-escaped HTML inside
    SystemSectionHtmlJson. The widget already supports per-slot Mendix widget containers
