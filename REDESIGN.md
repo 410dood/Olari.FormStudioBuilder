@@ -91,9 +91,15 @@ produce/consume JSON. The redesign makes the widget speak Mendix natively.
    enforcement (rejecting/flattening the value) is DEFERRED until the step-7 single-write-path work
    lands and the server consumers are confirmed manifest-aware. `__sectionVisibility` (widget-
    internal map) is exempt.
-7. One write path for answers — widget commits AnswersJson directly AND pages call SaveAnswers;
-   pick the widget's direct commit as canonical (the FormDocumentSection before-commit handler now
-   recomputes counts + materializes FormAnswer rows on any commit) and slim SaveAnswers to UX only.
+7. ✅ RESOLVED 2026-08-04 (no change needed) — audit confirmed ACT_FormDocumentSection_SaveAnswers
+   is already minimal: AnswersJson commit (canonical trigger; BCo handler rides it) + LastAutoSavedAt
+   + one RecomputeRequired call that is the SOLE maintainer of the doc-level AllRequiredComplete flag
+   (kept by design). All other recompute call sites audited: each remaining call is necessary (gates
+   on the fresh return value or flips the doc flag after adding a section). Runtime-verified: autosave
+   marker landed in AnswersJson + FormAnswer rows via the before-commit handler. FLAGGED (not fixed):
+   RecomputeRequired's per-section loop re-commits sections → BCo runs twice per autosave (identical
+   data, harmless); surgical fix if ever wanted = stop re-committing unchanged sections inside
+   SUB_Section_ComputeRequiredComplete, NOT touching SaveAnswers.
 8. Split the 15.9k-line monolith (RjsfFormBuilder.tsx) into modules: designer/, viewer/, pdf/,
    tokens/, schema/. Mechanical but big; do after the contract changes so churn happens once.
 9. ✅ DONE (2026-08-04) Builder-enforced governance — shared-bound fields
