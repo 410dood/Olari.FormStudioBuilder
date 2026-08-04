@@ -4720,6 +4720,72 @@ function normalizeComponent(item: any, index: number): FormComponent {
     visibility: normalizeVisibility(visibilitySource)
   };
 }
+// Redesign step 4: flat fields manifest, written alongside the component tree
+// on every save. Server-side consumers (TemplateField snapshot, publish
+// validation) can read this simple array instead of parsing the nested
+// component tree. Purely additive: readers ignore it; `components` stays the
+// source of truth in the designer. Named fieldsManifest (NOT `fields`) because
+// parseDefinition treats a top-level `fields` array as legacy components.
+const FIELDS_MANIFEST_VERSION = 1;
+interface FieldManifestEntry {
+  key: string;
+  type: string;
+  label: string;
+  required: boolean;
+  options?: string[];
+  tokenKey?: string;
+  prefillTokenKey?: string;
+  multiSelect?: boolean;
+  section?: string;
+  sectionOrder?: number;
+  systemTemplateType?: string;
+}
+function buildFieldsManifest(definition: FormDefinition): FieldManifestEntry[] {
+  return (definition.components || [])
+    .filter((component) => clean(component.key))
+    .map((component) => {
+      const entry: FieldManifestEntry = {
+        key: component.key,
+        type: String(component.type || ""),
+        label: component.label == null ? "" : String(component.label),
+        required: component.required === true
+      };
+      if (Array.isArray(component.options) && component.options.length) {
+        entry.options = component.options.map((option) => String(option));
+      }
+      const tokenKey = clean(component.sharedFieldRef) || clean(component.tokenKey);
+      if (tokenKey) {
+        entry.tokenKey = tokenKey;
+      }
+      if (clean(component.prefillTokenKey)) {
+        entry.prefillTokenKey = clean(component.prefillTokenKey);
+      }
+      if (component.multiSelect === true) {
+        entry.multiSelect = true;
+      }
+      if (clean(component.section)) {
+        entry.section = clean(component.section);
+      }
+      if (typeof component.sectionOrder === "number") {
+        entry.sectionOrder = component.sectionOrder;
+      }
+      if (component.systemTemplateType) {
+        entry.systemTemplateType = String(component.systemTemplateType);
+      }
+      return entry;
+    });
+}
+function serializeDefinitionWithManifest(definition: FormDefinition): string {
+  return JSON.stringify(
+    {
+      ...definition,
+      fieldsManifestVersion: FIELDS_MANIFEST_VERSION,
+      fieldsManifest: buildFieldsManifest(definition)
+    },
+    null,
+    2
+  );
+}
 function parseDefinition(raw?: string): {
   value: FormDefinition;
   error?: string;
@@ -9043,7 +9109,7 @@ export default function FormStudioBuilder(
       ) {
         return;
       }
-      const nextDefinitionJson = JSON.stringify(nextDefinition, null, 2);
+      const nextDefinitionJson = serializeDefinitionWithManifest(nextDefinition);
       writeAttribute(source?.formDefinitionAttr, nextDefinitionJson);
       const rawTitle =
         nextDefinition.title == null ? "" : String(nextDefinition.title);

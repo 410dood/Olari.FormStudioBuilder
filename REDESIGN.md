@@ -59,10 +59,16 @@ produce/consume JSON. The redesign makes the widget speak Mendix natively.
    must happen in Studio Pro — DocumentViewer file-prop hazard). Until then the escaping-hardened
    HTML builders remain the live path. UNTESTED at runtime for the same reason (no viewer page runs
    this widget); logic is TS-checked and mirrors the legacy markup exactly.
-4. Versioned DefinitionJson contract — treat "version" as a real contract; bump on shape changes;
-   emit a flat fields manifest (key/type/label/required/options/tokenKey/section/sectionOrder)
-   alongside the component tree so FormStudio.SUB_TemplateFields_Snapshot becomes a trivial loop
-   instead of a string parser.
+4. ✅ DONE + RUNTIME-VERIFIED (0.2.0, 2026-08-04) Fields manifest — every designer save now writes
+   `fieldsManifestVersion: 1` + `fieldsManifest: [{key,type,label,required,options?,tokenKey?,
+   prefillTokenKey?,multiSelect?,section?,sectionOrder?,systemTemplateType?}]` alongside the
+   component tree (serialized LAST; named fieldsManifest because parseDefinition claims a top-level
+   `fields` array as legacy components; tokenKey = sharedFieldRef || legacy tokenKey). Readers
+   ignore it; round-trip verified in the designer. Server: SUB_TemplateFields_Snapshot now anchors
+   its '"key"' walk AFTER the fieldsManifest marker when present — manifest entries only (no more
+   datagrid-column keys or double counting; a manifest-bearing draft snapshotted 18 rows on the old
+   parser, exactly 9 on the new one; 43 legacy versions unchanged at 1571 rows). Full version bump
+   of "version" deferred until a real shape change.
 5. Kill the LastToastMessage side-channel — use proper action props + a transient message; the
    'text|success|timestamp' attribute bus caused the double-toast bug and pollutes FormDocument rows.
 6. Formalize AnswersJson — document + runtime-assert: flat map, string values, stable key charset,
