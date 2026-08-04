@@ -126,6 +126,22 @@ The serialized answers object (written to `formDataAttr`) is a FLAT map keyed by
 - Server consumers depending on this shape: FormAnswer materialization, carry-forward probes, and
   required-count checks.
 
+## Viewer milestone — DONE 2026-08-04 (evening)
+Form_Editor_Tabs swapped to this widget (ped widgetId set; CE0463 cleared via Error List right-click
+"Update widget" — App>Tools>"Update Widgets..." is the MARKETPLACE updater, wrong tool). Wired via
+targeted pg: snippetsSource → DS_Snippet_ForDocument (ADoc auto-resolves from context) + name/text/
+scope attrs; toastMessageAttr needed an ASSOCIATION-PATH AttributeRef (widget sits in a
+FormDocumentSection listview → steps FormDocumentSection_FormDocument → LastToastMessage).
+jsToastRelay removed. HAZARD CONFIRMED: even targeted pg ops on that page wipe the DocumentViewer's
+file prop — repaired twice via UIA (Select Entity → dvLockedPdf/DocPdf). Server:
+FormDocument.SystemSectionDataJson attr + SUB_FormDocument_BuildSystemSectionData (5 slots, data
+rows, escaped) called at start of BuildSystemSectionHtml. RUNTIME VERIFIED: new bundle serves the
+doc editor, sections render, autosave works, SystemSectionDataJson = valid JSON with 5 slots and
+real rows, single 'Document created' toast. Steps 2+3 wiring therefore COMPLETE except the one
+manual nested binding: systemSectionDataJsonAttr inside Form context (Studio Pro only). Retirements
+still blocked: BuildCatalogJson (PrepareForDesigner writes TokenCatalogJson), BuildSnippetsJson
+(ACT_FormDocument_Open + Form_Editor_Tabs_2 still on old widget).
+
 ## Build/deploy
 npm install; npm run build → dist/<version>/olari.FormStudioBuilder.mpk (also auto-copied to the
 Mendix project's widgets/ if configured). Deploy: copy .mpk to Olari-main/widgets, F5 in Studio Pro.
