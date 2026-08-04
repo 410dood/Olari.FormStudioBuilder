@@ -219,77 +219,6 @@
             </attributeTypes>
         </property>
 
-        <property key="tokenCatalogSource" type="datasource" isList="true" required="false">
-            <caption>Token catalog datasource</caption>
-            <category>Data</category>
-            <description>Preferred over Token catalog schema JSON. Datasource of token definitions (one row per token) used by the builder token picker. When set and available, the JSON attribute is ignored.</description>
-        </property>
-        <property key="tokenCatalogKeyAttr" type="attribute" dataSource="tokenCatalogSource" required="false">
-            <caption>Catalog: token key</caption>
-            <category>Data</category>
-            <description>Token key, for example client.fullName. Required for the datasource to be used.</description>
-            <attributeTypes>
-                <attributeType name="String" />
-            </attributeTypes>
-        </property>
-        <property key="tokenCatalogLabelAttr" type="attribute" dataSource="tokenCatalogSource" required="false">
-            <caption>Catalog: display name</caption>
-            <category>Data</category>
-            <description>Human-readable token label shown in the picker.</description>
-            <attributeTypes>
-                <attributeType name="String" />
-            </attributeTypes>
-        </property>
-        <property key="tokenCatalogKindAttr" type="attribute" dataSource="tokenCatalogSource" required="false">
-            <caption>Catalog: kind or source type</caption>
-            <category>Data</category>
-            <description>Optional. Accepts widget kinds (client, doc, computed, sharedField) or Mendix source types (Computed, DerivedFromEntity, FormAnswer, UserEntered). When omitted the kind is derived from the token key prefix.</description>
-            <attributeTypes>
-                <attributeType name="String" />
-                <attributeType name="Enum" />
-            </attributeTypes>
-        </property>
-        <property key="tokenCatalogFieldTypeAttr" type="attribute" dataSource="tokenCatalogSource" required="false">
-            <caption>Catalog: field type</caption>
-            <category>Data</category>
-            <description>Field type a palette drop should create (text, date, select, ...).</description>
-            <attributeTypes>
-                <attributeType name="String" />
-            </attributeTypes>
-        </property>
-        <property key="tokenCatalogDefaultLabelAttr" type="attribute" dataSource="tokenCatalogSource" required="false">
-            <caption>Catalog: default field label</caption>
-            <category>Data</category>
-            <description>Label a palette drop puts on the created form field.</description>
-            <attributeTypes>
-                <attributeType name="String" />
-            </attributeTypes>
-        </property>
-        <property key="tokenCatalogOptionsJsonAttr" type="attribute" dataSource="tokenCatalogSource" required="false">
-            <caption>Catalog: options JSON</caption>
-            <category>Data</category>
-            <description>JSON array of select/radio options for this token. Invalid or empty JSON yields no options.</description>
-            <attributeTypes>
-                <attributeType name="String" />
-            </attributeTypes>
-        </property>
-        <property key="tokenCatalogCanonicalAttr" type="attribute" dataSource="tokenCatalogSource" required="false">
-            <caption>Catalog: canonical</caption>
-            <category>Data</category>
-            <description>True when any form may update this shared token.</description>
-            <attributeTypes>
-                <attributeType name="Boolean" />
-            </attributeTypes>
-        </property>
-        <property key="tokenCatalogSourcePathAttr" type="attribute" dataSource="tokenCatalogSource" required="false">
-            <caption>Catalog: source path</caption>
-            <category>Data</category>
-            <description>Provenance for form-answer tokens in TemplateCode:fieldKey form. The field key part is the identity; the template code is metadata.</description>
-            <attributeTypes>
-                <attributeType name="String" />
-            </attributeTypes>
-        </property>
-
         <property key="viewMode" type="enumeration" defaultValue="designer" required="true">
             <caption>View mode</caption>
             <category>Behavior</category>
@@ -434,6 +363,77 @@
         </property>
 
 
+
+        <property key="tokenCatalogSource" type="datasource" isList="true" required="false">
+            <caption>Token catalog datasource</caption>
+            <category>Data</category>
+            <description>Preferred over Token catalog schema JSON. Datasource of token definitions (one row per token) used by the builder token picker. When set and available, the JSON attribute is ignored.</description>
+        </property>
+        <property key="tokenCatalogKeyAttr" type="attribute" dataSource="tokenCatalogSource" required="false">
+            <caption>Catalog: token key</caption>
+            <category>Data</category>
+            <description>Token key, for example client.fullName. Required for the datasource to be used.</description>
+            <attributeTypes>
+                <attributeType name="String" />
+            </attributeTypes>
+        </property>
+        <property key="tokenCatalogLabelAttr" type="attribute" dataSource="tokenCatalogSource" required="false">
+            <caption>Catalog: display name</caption>
+            <category>Data</category>
+            <description>Human-readable token label shown in the picker.</description>
+            <attributeTypes>
+                <attributeType name="String" />
+            </attributeTypes>
+        </property>
+        <property key="tokenCatalogKindAttr" type="attribute" dataSource="tokenCatalogSource" required="false">
+            <caption>Catalog: kind or source type</caption>
+            <category>Data</category>
+            <description>Optional. Accepts widget kinds (client, doc, computed, sharedField) or Mendix source types (Computed, DerivedFromEntity, FormAnswer, UserEntered). When omitted the kind is derived from the token key prefix.</description>
+            <attributeTypes>
+                <attributeType name="String" />
+                <attributeType name="Enum" />
+            </attributeTypes>
+        </property>
+        <property key="tokenCatalogFieldTypeAttr" type="attribute" dataSource="tokenCatalogSource" required="false">
+            <caption>Catalog: field type</caption>
+            <category>Data</category>
+            <description>Field type a palette drop should create (text, date, select, ...).</description>
+            <attributeTypes>
+                <attributeType name="String" />
+            </attributeTypes>
+        </property>
+        <property key="tokenCatalogDefaultLabelAttr" type="attribute" dataSource="tokenCatalogSource" required="false">
+            <caption>Catalog: default field label</caption>
+            <category>Data</category>
+            <description>Label a palette drop puts on the created form field.</description>
+            <attributeTypes>
+                <attributeType name="String" />
+            </attributeTypes>
+        </property>
+        <property key="tokenCatalogOptionsJsonAttr" type="attribute" dataSource="tokenCatalogSource" required="false">
+            <caption>Catalog: options JSON</caption>
+            <category>Data</category>
+            <description>JSON array of select/radio options for this token. Invalid or empty JSON yields no options.</description>
+            <attributeTypes>
+                <attributeType name="String" />
+            </attributeTypes>
+        </property>
+        <property key="tokenCatalogCanonicalAttr" type="attribute" dataSource="tokenCatalogSource" required="false">
+            <caption>Catalog: canonical</caption>
+            <category>Data</category>
+            <description>True when any form may update this shared token.</description>
+            <attributeTypes>
+                <attributeType name="Boolean" />
+            </attributeTypes>
+        </property>
+        <property key="tokenCatalogSourcePathAttr" type="attribute" dataSource="tokenCatalogSource" required="false">
+            <caption>Catalog: source path</caption>
+            <category>Data</category>
+            <description>Provenance for form-answer tokens in TemplateCode:fieldKey form. The field key part is the identity; the template code is metadata.</description>
+            <attributeTypes>
+                <attributeType name="String" />
+            </attributeTypes>
+        </property>
 
         <systemProperty key="Editability" />
     </properties>

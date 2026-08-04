@@ -19,8 +19,21 @@ produce/consume JSON. The redesign makes the widget speak Mendix natively.
    FormAnswer/UserEntered), else is derived from the key prefix. Server side: `FormStudio.
    DS_TokenDef_Catalog` (active TokenDefs, Category+DisplayName sort, User+Admin) added — wire it to
    the widget's Token catalog datasource, mapping Catalog: source path → TokenDef.SourcePath.
-   NOT YET DONE: wiring on a page + runtime verification; only then can
-   SUB_Tokens_BuildCatalogJson be retired.
+   WIRED 2026-08-04 on `FormStudio.Template_Designer`: widget swapped to this one (widgetId set +
+   App → Tools → Update Widgets), Token catalog datasource → DS_TokenDef_Catalog. Runtime verified:
+   designer loads from this bundle (widgets/olari/formstudiobuilder/FormStudioBuilder.js), template
+   opens with all fields/panels, no regression.
+   REMAINING MANUAL STEP (Studio Pro, ~1 min): the 7 "Catalog: ..." attribute dropdowns could NOT be
+   set via the API — `value/attributeRef` writes report success but do not persist. Open
+   Template_Designer → select wgtDesigner → set Catalog: token key=TokenKey, display name=DisplayName,
+   field type=FieldType, default field label=DefaultLabel, options JSON=OptionsJson,
+   canonical=IsCanonical, source path=SourcePath. Leave "kind or source type" EMPTY (the widget
+   derives kind from the key prefix; binding the SourceType enum was rejected by the API and is not
+   needed). Until then the widget falls back to the JSON catalog by design — so the page is safe,
+   just not yet exercising the new path. Only after that can SUB_Tokens_BuildCatalogJson be retired.
+   DEBT: the page carries 8 duplicate (empty) WidgetProperty entries from Update Widgets; they are
+   harmless (no consistency errors) and cannot be removed via API — Studio Pro should normalize them
+   when the widget's properties are edited in the UI.
 2. Snippets via datasource — same treatment for snippetsJsonAttr (Snippet datasource: id/name/text/scope).
 3. System sections as data, not HTML — server currently ships hand-escaped HTML inside
    SystemSectionHtmlJson. The widget already supports per-slot Mendix widget containers
