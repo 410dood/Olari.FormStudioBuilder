@@ -22,7 +22,8 @@ import type {
   DynamicValue,
   EditableValue,
   ListAttributeValue,
-  ListValue
+  ListValue,
+  ObjectItem
 } from "mendix";
 import { Big } from "big.js";
 import Form from "@rjsf/core";
@@ -169,6 +170,15 @@ export interface FormStudioBuilderProps {
   tokenContextSource?: ListValue;
   tokenContextKeyAttr?: ListAttributeValue<string | Big>;
   tokenContextValueAttr?: ListAttributeValue<string | Big | boolean | Date>;
+  tokenCatalogSource?: ListValue;
+  tokenCatalogKeyAttr?: ListAttributeValue<string>;
+  tokenCatalogLabelAttr?: ListAttributeValue<string>;
+  tokenCatalogKindAttr?: ListAttributeValue<string>;
+  tokenCatalogFieldTypeAttr?: ListAttributeValue<string>;
+  tokenCatalogDefaultLabelAttr?: ListAttributeValue<string>;
+  tokenCatalogOptionsJsonAttr?: ListAttributeValue<string>;
+  tokenCatalogCanonicalAttr?: ListAttributeValue<boolean>;
+  tokenCatalogSourcePathAttr?: ListAttributeValue<string>;
   viewMode?: ViewMode;
   showPalettePanel?: boolean | DynamicValue<boolean>;
   showComponentsPanel?: boolean | DynamicValue<boolean>;
@@ -1390,6 +1400,124 @@ function parseTokenCatalog(raw?: string): CatalogToken[] {
   } catch (_error) {
     return [];
   }
+}
+// Datasource catalog (redesign step 1). Preferred over parseTokenCatalog's JSON
+// blob: rows come straight from FormStudio.TokenDef, so no server-side JSON is
+// built and nothing can be corrupted by an unescaped quote in a display name.
+function deriveCatalogKind(key: string, rawKind: string, hasFieldKey: boolean): CatalogTokenKind {
+  const kind = clean(rawKind);
+  if (CATALOG_TOKEN_KINDS.has(kind)) {
+    return kind as CatalogTokenKind;
+  }
+  // Mendix TokenSourceType enum names.
+  const lowered = kind.toLowerCase();
+  if (lowered === "formanswer") {
+    return "sharedField";
+  }
+  if (lowered === "computed") {
+    return "computed";
+  }
+  if (lowered === "derivedfromentity") {
+    return clean(key).toLowerCase().startsWith("client.") ? "client" : "doc";
+  }
+  // No usable kind supplied — infer from the key, then from provenance.
+  const loweredKey = clean(key).toLowerCase();
+  if (loweredKey.startsWith("client.")) {
+    return "client";
+  }
+  if (
+    loweredKey.startsWith("document.") ||
+    loweredKey.startsWith("provider.") ||
+    loweredKey.startsWith("printed.") ||
+    loweredKey.startsWith("doc.")
+  ) {
+    return "doc";
+  }
+  return hasFieldKey ? "sharedField" : "computed";
+}
+function readListString(
+  attr: ListAttributeValue<string> | undefined,
+  item: ObjectItem
+): string {
+  if (!attr) {
+    return "";
+  }
+  const value = attr.get(item) as any;
+  if (!value || normalizeStatus(value.status) !== "available") {
+    return "";
+  }
+  return clean(value.value);
+}
+function buildTokenCatalogFromDatasource(
+  source?: ListValue,
+  keyAttr?: ListAttributeValue<string>,
+  labelAttr?: ListAttributeValue<string>,
+  kindAttr?: ListAttributeValue<string>,
+  fieldTypeAttr?: ListAttributeValue<string>,
+  defaultLabelAttr?: ListAttributeValue<string>,
+  optionsJsonAttr?: ListAttributeValue<string>,
+  canonicalAttr?: ListAttributeValue<boolean>,
+  sourcePathAttr?: ListAttributeValue<string>
+): CatalogToken[] | undefined {
+  // undefined = "not configured, fall back to JSON". An empty array is a real
+  // (empty) catalog and suppresses the fallback.
+  if (!source || !keyAttr) {
+    return undefined;
+  }
+  const sourceStatus = normalizeStatus((source as any).status);
+  if (sourceStatus === "loading" || sourceStatus === "unavailable") {
+    return undefined;
+  }
+  const tokens: CatalogToken[] = [];
+  (source.items || []).forEach((item) => {
+    const key = readListString(keyAttr, item);
+    if (!key) {
+      return;
+    }
+    const sourcePath = readListString(sourcePathAttr, item);
+    const colonIdx = sourcePath.indexOf(":");
+    const templateCode = colonIdx > 0 ? sourcePath.slice(0, colonIdx) : "";
+    const fieldKey =
+      colonIdx >= 0
+        ? sourcePath.slice(colonIdx + 1)
+        : key.startsWith("shared.")
+          ? key.slice("shared.".length)
+          : "";
+    let options: unknown[] = [];
+    const optionsRaw = readListString(optionsJsonAttr, item);
+    if (optionsRaw) {
+      try {
+        const parsed = JSON.parse(optionsRaw);
+        options = Array.isArray(parsed) ? parsed : [];
+      } catch (_error) {
+        options = [];
+      }
+    }
+    let canonical = false;
+    if (canonicalAttr) {
+      const canonicalValue = canonicalAttr.get(item) as any;
+      canonical =
+        !!canonicalValue &&
+        normalizeStatus(canonicalValue.status) === "available" &&
+        canonicalValue.value === true;
+    }
+    const defaultLabel = readListString(defaultLabelAttr, item);
+    tokens.push({
+      key,
+      kind: deriveCatalogKind(key, readListString(kindAttr, item), !!fieldKey),
+      label:
+        readListString(labelAttr, item) ||
+        defaultLabel ||
+        humanizeTokenKey(key) ||
+        key,
+      fieldType: readListString(fieldTypeAttr, item),
+      defaultLabel,
+      options,
+      canonical,
+      source: fieldKey ? { templateCode, fieldKey } : undefined
+    });
+  });
+  return tokens.sort((a, b) => a.label.localeCompare(b.label));
 }
 interface SharedFieldCatalogEntry {
   tokenKey: string;
@@ -8677,10 +8805,36 @@ export default function FormStudioBuilder(
     () => parseSystemSectionHtmlJson(source?.systemSectionHtmlJsonAttr?.value),
     [source?.systemSectionHtmlJsonAttr?.value]
   );
-  const tokenCatalog = useMemo(
-    () => parseTokenCatalog(source?.tokenCatalogSchemaJsonAttr?.value),
-    [source?.tokenCatalogSchemaJsonAttr?.value]
-  );
+  const tokenCatalog = useMemo(() => {
+    // Datasource wins when configured; the JSON attribute is the deprecated
+    // migration fallback (redesign step 1).
+    const fromDatasource = buildTokenCatalogFromDatasource(
+      props.tokenCatalogSource,
+      props.tokenCatalogKeyAttr,
+      props.tokenCatalogLabelAttr,
+      props.tokenCatalogKindAttr,
+      props.tokenCatalogFieldTypeAttr,
+      props.tokenCatalogDefaultLabelAttr,
+      props.tokenCatalogOptionsJsonAttr,
+      props.tokenCatalogCanonicalAttr,
+      props.tokenCatalogSourcePathAttr
+    );
+    if (fromDatasource) {
+      return fromDatasource;
+    }
+    return parseTokenCatalog(source?.tokenCatalogSchemaJsonAttr?.value);
+  }, [
+    props.tokenCatalogSource,
+    props.tokenCatalogKeyAttr,
+    props.tokenCatalogLabelAttr,
+    props.tokenCatalogKindAttr,
+    props.tokenCatalogFieldTypeAttr,
+    props.tokenCatalogDefaultLabelAttr,
+    props.tokenCatalogOptionsJsonAttr,
+    props.tokenCatalogCanonicalAttr,
+    props.tokenCatalogSourcePathAttr,
+    source?.tokenCatalogSchemaJsonAttr?.value
+  ]);
   const tokenCatalogSchemaOptions = useMemo(
     () =>
       tokenCatalog
