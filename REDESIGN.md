@@ -77,8 +77,8 @@ produce/consume JSON. The redesign makes the widget speak Mendix natively.
    and re-triggers change machinery — observed as a double toast; dedupe alone is the fix).
    WIRED on Template_Designer (toastMessageAttr → FormTemplateVersion.LastToastMessage) and the
    page's jsToastRelay JS-snippet widget is REMOVED. Runtime-verified 'Template saved' renders from
-   the widget; the double-fire was reproduced and fixed (final single-toast retest pending next
-   deploy). NOTE the attribute channel itself remains (Mendix has no other microflow→widget push);
+   the widget; the double-fire was reproduced and fixed (single-toast RETESTED after the fix: exactly one
+   'Template saved' toast). NOTE the attribute channel itself remains (Mendix has no other microflow→widget push);
    the side-channel is now contained: no page JS, one display path, dedupe enforced.
    WIRING NOTE: top-level widget-object keys persist via pg_patch ONLY after Studio Pro has loaded
    the new .mpk — F5 (build+run) is the reliable reload; F4 and App→Tools→Update Widgets were NOT
