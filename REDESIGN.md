@@ -91,8 +91,13 @@ produce/consume JSON. The redesign makes the widget speak Mendix natively.
    recomputes counts + materializes FormAnswer rows on any commit) and slim SaveAnswers to UX only.
 8. Split the 15.9k-line monolith (RjsfFormBuilder.tsx) into modules: designer/, viewer/, pdf/,
    tokens/, schema/. Mechanical but big; do after the contract changes so churn happens once.
-9. Builder-enforced governance — options append-only once published; disable key/type edits on
-   published fields (server guards exist; the UI should stop users before the error).
+9. ◐ PARTIAL (0.2.0, 2026-08-04) Builder-enforced governance — shared-bound fields
+   (sharedFieldRef set) now HARD-BLOCK key renames (was a warn-and-allow) and type changes in the
+   properties panel, with a message pointing at unbinding first; mirrors the server publish guard.
+   STILL OPEN: options append-only enforcement in the options editor (remove/rename of an option on
+   a shared/published field should be blocked, add allowed) and 'published-anywhere' awareness for
+   NON-shared fields (needs published-usage data the widget doesn't have yet — could ride the
+   TemplateField datasource). Runtime test pending (needs a template with a shared-bound field).
 
 ## Build/deploy
 npm install; npm run build → dist/<version>/olari.FormStudioBuilder.mpk (also auto-copied to the

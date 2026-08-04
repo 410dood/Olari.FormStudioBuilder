@@ -12754,11 +12754,15 @@ export default function FormStudioBuilder(
                                 clean(selectedComponent.sharedFieldRef) &&
                                 raw !== selectedComponent.key
                               ) {
+                                // Redesign step 9: enforce, don't warn. The
+                                // server guard would block this at publish;
+                                // stop the user here instead.
                                 setMessage(
-                                  `Warning: this field is bound to shared field "${clean(
+                                  `This field is bound to shared field "${clean(
                                     selectedComponent.sharedFieldRef
-                                  )}". Renaming its key can break carry-forward for documents already saved under the old key - the publish step validates this.`
+                                  )}" — its key is locked. Unbind the shared field first if you really need to rename it.`
                                 );
+                                return;
                               }
                               updateDefinition((current) => ({
                                 ...current,
@@ -12895,7 +12899,18 @@ export default function FormStudioBuilder(
                                 ? "System template fields keep a fixed type."
                                 : undefined
                             }
-                            onChange={(event) =>
+                            onChange={(event) => {
+                              // Redesign step 9: type is locked while bound to
+                              // a shared field (server publish guard enforces
+                              // the same; stop the user here).
+                              if (clean(selectedComponent.sharedFieldRef)) {
+                                setMessage(
+                                  `This field is bound to shared field "${clean(
+                                    selectedComponent.sharedFieldRef
+                                  )}" — its type is locked. Unbind the shared field first to change it.`
+                                );
+                                return;
+                              }
                               updateDefinition((current) => ({
                                 ...current,
                                 components: current.components.map(
@@ -13069,8 +13084,8 @@ export default function FormStudioBuilder(
                                     };
                                   }
                                 )
-                              }))
-                            }
+                              }));
+                            }}
                           >
                             {" "}
                             {FIELD_TYPES.map((item) => (
