@@ -34,7 +34,17 @@ produce/consume JSON. The redesign makes the widget speak Mendix natively.
    UX; keep the fallback prop through the migration window.
    DEBT: the page carries duplicate (empty) WidgetProperty entries from Update Widgets; harmless, not
    removable via API; Studio Pro should normalize on next UI edit of the widget.
-2. Snippets via datasource — same treatment for snippetsJsonAttr (Snippet datasource: id/name/text/scope).
+2. ✅ WIDGET + SERVER DONE (0.2.0, 2026-08-04) Snippets via datasource — `snippetsSource` +
+   snippetNameAttr/snippetTextAttr/snippetScopeAttr (id = Mendix object id). JSON attr is the
+   deprecated fallback (same undefined-vs-empty semantics as the catalog). Server:
+   `FormStudio.DS_Snippet_ForDocument(ADoc)` reproduces SUB_FormDocument_BuildSnippetsJson's
+   visibility rules exactly (Team-or-owner check, DocumentTypesCsv filter, role targeting via
+   Snippet_UserRole_Staff + RolesCsv fallback) and returns the filtered Snippet list, Name-sorted.
+   NOT YET WIRED: snippets only matter in VIEWER fill mode; no viewer page runs this widget yet.
+   Wire when a viewer page (e.g. Form_Editor_Tabs) is swapped — CAUTION: Form_Editor_Tabs contains a
+   DocumentViewer with a file-type prop; do that swap in Studio Pro, NOT via pg_patch (known wipe
+   hazard). Datasource: ctx = FormDocument data view → DS_Snippet_ForDocument. After wiring +
+   verification, SUB_FormDocument_BuildSnippetsJson and FormDocument.SnippetsJson are retirable.
 3. System sections as data, not HTML — server currently ships hand-escaped HTML inside
    SystemSectionHtmlJson. The widget already supports per-slot Mendix widget containers
    (activeMedicationsDatagrid2 etc.) — prefer those everywhere; for PDF output, accept ROWS

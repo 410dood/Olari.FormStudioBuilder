@@ -435,6 +435,37 @@
             </attributeTypes>
         </property>
 
+        <property key="snippetsSource" type="datasource" isList="true" required="false">
+            <caption>Snippets datasource</caption>
+            <category>Data</category>
+            <description>Preferred over Snippets JSON. Datasource of canned-text snippet rows offered on text/textarea fields in viewer fill mode. When set and available, the JSON attribute is ignored.</description>
+        </property>
+        <property key="snippetNameAttr" type="attribute" dataSource="snippetsSource" required="false">
+            <caption>Snippet: name</caption>
+            <category>Data</category>
+            <description>Snippet display name. Required for the datasource to be used.</description>
+            <attributeTypes>
+                <attributeType name="String" />
+            </attributeTypes>
+        </property>
+        <property key="snippetTextAttr" type="attribute" dataSource="snippetsSource" required="false">
+            <caption>Snippet: text</caption>
+            <category>Data</category>
+            <description>The canned text inserted when the snippet is picked.</description>
+            <attributeTypes>
+                <attributeType name="String" />
+            </attributeTypes>
+        </property>
+        <property key="snippetScopeAttr" type="attribute" dataSource="snippetsSource" required="false">
+            <caption>Snippet: scope</caption>
+            <category>Data</category>
+            <description>Optional scope label (for example Personal or Team) used to group snippets in the popover. Defaults to Personal.</description>
+            <attributeTypes>
+                <attributeType name="String" />
+                <attributeType name="Enum" />
+            </attributeTypes>
+        </property>
+
         <systemProperty key="Editability" />
     </properties>
 </widget>

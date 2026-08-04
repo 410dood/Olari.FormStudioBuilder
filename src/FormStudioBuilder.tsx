@@ -179,6 +179,10 @@ export interface FormStudioBuilderProps {
   tokenCatalogOptionsJsonAttr?: ListAttributeValue<string>;
   tokenCatalogCanonicalAttr?: ListAttributeValue<boolean>;
   tokenCatalogSourcePathAttr?: ListAttributeValue<string>;
+  snippetsSource?: ListValue;
+  snippetNameAttr?: ListAttributeValue<string>;
+  snippetTextAttr?: ListAttributeValue<string>;
+  snippetScopeAttr?: ListAttributeValue<string>;
   viewMode?: ViewMode;
   showPalettePanel?: boolean | DynamicValue<boolean>;
   showComponentsPanel?: boolean | DynamicValue<boolean>;
@@ -1322,6 +1326,39 @@ function parseSnippetsJson(raw?: string): SnippetItem[] {
   } catch (_error) {
     return [];
   }
+}
+// Datasource snippets (redesign step 2). Preferred over parseSnippetsJson's
+// urlEncoded JSON blob; rows come from FormStudio.Snippet via a DS microflow
+// that applies the same visibility rules the JSON builder used.
+function buildSnippetsFromDatasource(
+  source?: ListValue,
+  nameAttr?: ListAttributeValue<string>,
+  textAttr?: ListAttributeValue<string>,
+  scopeAttr?: ListAttributeValue<string>
+): SnippetItem[] | undefined {
+  // undefined = "not configured, fall back to JSON". Empty array = real empty.
+  if (!source || !nameAttr || !textAttr) {
+    return undefined;
+  }
+  const sourceStatus = normalizeStatus((source as any).status);
+  if (sourceStatus === "loading" || sourceStatus === "unavailable") {
+    return undefined;
+  }
+  const snippets: SnippetItem[] = [];
+  (source.items || []).forEach((item, index) => {
+    const name = readListString(nameAttr, item);
+    const text = readListString(textAttr, item);
+    if (!name || !text) {
+      return;
+    }
+    snippets.push({
+      id: (item as any).id || `snippet-${index}`,
+      name,
+      text,
+      scope: readListString(scopeAttr, item) || "Personal"
+    });
+  });
+  return snippets;
 }
 type CatalogTokenKind = "client" | "doc" | "computed" | "sharedField";
 interface CatalogToken {
@@ -8774,8 +8811,25 @@ export default function FormStudioBuilder(
     [source?.tokenContextJsonAttr?.value]
   );
   const viewerSnippets = useMemo(
-    () => parseSnippetsJson(source?.snippetsJsonAttr?.value),
-    [source?.snippetsJsonAttr?.value]
+    () => {
+      const fromDatasource = buildSnippetsFromDatasource(
+        props.snippetsSource,
+        props.snippetNameAttr,
+        props.snippetTextAttr,
+        props.snippetScopeAttr
+      );
+      if (fromDatasource) {
+        return fromDatasource;
+      }
+      return parseSnippetsJson(source?.snippetsJsonAttr?.value);
+    },
+    [
+      props.snippetsSource,
+      props.snippetNameAttr,
+      props.snippetTextAttr,
+      props.snippetScopeAttr,
+      source?.snippetsJsonAttr?.value
+    ]
   );
   const viewerFillRef = useRef<HTMLDivElement | null>(null);
   const manageSnippetsAction = source?.onManageSnippets;
