@@ -23,17 +23,17 @@ produce/consume JSON. The redesign makes the widget speak Mendix natively.
    App → Tools → Update Widgets), Token catalog datasource → DS_TokenDef_Catalog. Runtime verified:
    designer loads from this bundle (widgets/olari/formstudiobuilder/FormStudioBuilder.js), template
    opens with all fields/panels, no regression.
-   REMAINING MANUAL STEP (Studio Pro, ~1 min): the 7 "Catalog: ..." attribute dropdowns could NOT be
-   set via the API — `value/attributeRef` writes report success but do not persist. Open
-   Template_Designer → select wgtDesigner → set Catalog: token key=TokenKey, display name=DisplayName,
-   field type=FieldType, default field label=DefaultLabel, options JSON=OptionsJson,
-   canonical=IsCanonical, source path=SourcePath. Leave "kind or source type" EMPTY (the widget
-   derives kind from the key prefix; binding the SourceType enum was rejected by the API and is not
-   needed). Until then the widget falls back to the JSON catalog by design — so the page is safe,
-   just not yet exercising the new path. Only after that can SUB_Tokens_BuildCatalogJson be retired.
-   DEBT: the page carries 8 duplicate (empty) WidgetProperty entries from Update Widgets; they are
-   harmless (no consistency errors) and cannot be removed via API — Studio Pro should normalize them
-   when the widget's properties are edited in the UI.
+   FULLY WIRED + RUNTIME-VERIFIED 2026-08-04 (second pass): the 7 attribute bindings were applied
+   via pg_patch_page on the LightPage object keys (tokenCatalogKeyAttr=TokenKey, Label=DisplayName,
+   FieldType, DefaultLabel, OptionsJson, Canonical=IsCanonical, SourcePath) — this is the API route
+   that WORKS; ped deep-sets on WidgetProperty values land on renumbered slots. "kind or source type"
+   left unbound by design (kind derives from key prefix). PROOF the datasource path is live: React
+   fiber inspection of the mounted widget shows tokenCatalogSource status=available, 15 items, keys
+   readable via the bound ListAttributeValue (client.full_name, ...). The JSON fallback is therefore
+   skipped. SUB_Tokens_BuildCatalogJson is now RETIRABLE (server side) once Bill confirms the picker
+   UX; keep the fallback prop through the migration window.
+   DEBT: the page carries duplicate (empty) WidgetProperty entries from Update Widgets; harmless, not
+   removable via API; Studio Pro should normalize on next UI edit of the widget.
 2. Snippets via datasource — same treatment for snippetsJsonAttr (Snippet datasource: id/name/text/scope).
 3. System sections as data, not HTML — server currently ships hand-escaped HTML inside
    SystemSectionHtmlJson. The widget already supports per-slot Mendix widget containers
