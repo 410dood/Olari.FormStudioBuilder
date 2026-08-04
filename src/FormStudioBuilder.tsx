@@ -5128,6 +5128,38 @@ function sanitizeFormData(
   }
   return nextData;
 }
+// Redesign step 6: AnswersJson contract runtime-assert (warn-only for now;
+// hard enforcement deferred). The serialized answers object must be a FLAT
+// map keyed by field key whose values are string | number | boolean |
+// string[] (multi-select) | array of flat row objects (datagrid rows). A
+// top-level value that is a non-array object breaks the server-side
+// FormAnswer materialization / carry-forward probes / required-count checks.
+// We log once per key and keep the value unchanged (no data loss).
+// SECTION_VISIBILITY_DATA_KEY is widget-internal and exempt by design.
+const warnedNestedAnswerKeys = new Set<string>();
+function assertAnswersShape(data: JsonObject): JsonObject {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return data;
+  }
+  Object.keys(data).forEach((key) => {
+    if (key === SECTION_VISIBILITY_DATA_KEY) {
+      return;
+    }
+    const value = data[key];
+    if (
+      value !== null &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      !warnedNestedAnswerKeys.has(key)
+    ) {
+      warnedNestedAnswerKeys.add(key);
+      console.warn(
+        `FormStudioBuilder: answer "${key}" is a nested object — flat values expected by the FormAnswer pipeline`
+      );
+    }
+  });
+  return data;
+}
 function buildFieldSchema(component: FormComponent): JsonObject {
   const title = component.label || component.key;
   if (component.type === "datagrid") {
@@ -9203,7 +9235,11 @@ export default function FormStudioBuilder(
         );
         writeAttribute(source?.resolvedPdfHtmlAttr, outputArtifacts.pdfHtml);
       }
-      const nextDataJson = JSON.stringify(sanitizedData, null, 2);
+      const nextDataJson = JSON.stringify(
+        assertAnswersShape(sanitizedData),
+        null,
+        2
+      );
       writeAttribute(source?.formDataAttr, nextDataJson);
       writeAttribute(
         source?.formSchemaAttr,
@@ -9241,7 +9277,11 @@ export default function FormStudioBuilder(
       ) {
         return;
       }
-      const nextDataJson = JSON.stringify(sanitizedData, null, 2);
+      const nextDataJson = JSON.stringify(
+        assertAnswersShape(sanitizedData),
+        null,
+        2
+      );
       writeAttribute(source?.formDataAttr, nextDataJson);
       if (triggerChange) {
         runAction(source?.onChangeAction);
@@ -10313,6 +10353,36 @@ export default function FormStudioBuilder(
   const persistChoiceOptionsDraft = useCallback(
     (componentId: string, rows: ChoiceOptionDraft[]) => {
       const normalized = normalizeChoiceOptionDrafts(rows);
+      // Redesign step 9: options are append-only on shared-bound fields.
+      // Every options mutation (value rename on blur, remove, reorder,
+      // add) funnels through here, so one set-difference check enforces
+      // the rule: any previously-persisted option value missing from the
+      // next set means a remove or a canonical-value rename — block it,
+      // matching the key-rename hard block. Adding options passes (the
+      // next set is a superset); reorder passes (same set — order is not
+      // identity); label edits stored in optionLabels pass (they never
+      // touch the options array). NOTE a label edit on a row with a blank
+      // Value column DOES change the canonical option string, so it is
+      // correctly blocked too.
+      const target = definition.components.find(
+        (component) => component.id === componentId
+      );
+      const sharedRef = clean(target?.sharedFieldRef);
+      if (target && sharedRef) {
+        const nextValues = new Set(normalized.options || []);
+        const lostValues = (target.options || []).filter(
+          (value) => !nextValues.has(value)
+        );
+        if (lostValues.length) {
+          setMessage(
+            `Shared field "${sharedRef}" options are append-only — removing or renaming an option orphans historic answers. Adding new options is allowed.`
+          );
+          // Re-sync the draft rows to the (unchanged) persisted options so
+          // the editor does not keep showing the blocked edit.
+          setChoiceOptionsDraft(buildChoiceOptionDrafts(target));
+          return;
+        }
+      }
       setChoiceOptionsDraft(normalized.rows);
       updateDefinition((current) => ({
         ...current,
@@ -10338,7 +10408,7 @@ export default function FormStudioBuilder(
         })
       }));
     },
-    [updateDefinition]
+    [definition.components, updateDefinition]
   );
   const persistMatrixRowsDraft = useCallback(
     (

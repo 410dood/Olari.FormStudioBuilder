@@ -83,21 +83,48 @@ produce/consume JSON. The redesign makes the widget speak Mendix natively.
    WIRING NOTE: top-level widget-object keys persist via pg_patch ONLY after Studio Pro has loaded
    the new .mpk — F5 (build+run) is the reliable reload; F4 and App→Tools→Update Widgets were NOT
    sufficient/verified for this (see Bill's correction 2026-08-04).
-6. Formalize AnswersJson — document + runtime-assert: flat map, string values, stable key charset,
-   documented multi-select encoding. Server (FormAnswer materialization + carry-forward probes)
-   depends on this shape.
+6. ✅ DONE (warn-only) (2026-08-04) Formalize AnswersJson — documented (see "AnswersJson contract"
+   below) + runtime-asserted: `assertAnswersShape` walks the top-level entries right before every
+   `formDataAttr` write (both the `persist` and `persistDataOnly` paths) and `console.warn`s once
+   per key when a value is a non-array plain object (nested object = contract breach for the
+   FormAnswer pipeline). Warn-only by design: the value is kept unchanged (no data loss); HARD
+   enforcement (rejecting/flattening the value) is DEFERRED until the step-7 single-write-path work
+   lands and the server consumers are confirmed manifest-aware. `__sectionVisibility` (widget-
+   internal map) is exempt.
 7. One write path for answers — widget commits AnswersJson directly AND pages call SaveAnswers;
    pick the widget's direct commit as canonical (the FormDocumentSection before-commit handler now
    recomputes counts + materializes FormAnswer rows on any commit) and slim SaveAnswers to UX only.
 8. Split the 15.9k-line monolith (RjsfFormBuilder.tsx) into modules: designer/, viewer/, pdf/,
    tokens/, schema/. Mechanical but big; do after the contract changes so churn happens once.
-9. ◐ PARTIAL (0.2.0, 2026-08-04) Builder-enforced governance — shared-bound fields
+9. ✅ DONE (2026-08-04) Builder-enforced governance — shared-bound fields
    (sharedFieldRef set) now HARD-BLOCK key renames (was a warn-and-allow) and type changes in the
    properties panel, with a message pointing at unbinding first; mirrors the server publish guard.
-   STILL OPEN: options append-only enforcement in the options editor (remove/rename of an option on
-   a shared/published field should be blocked, add allowed) and 'published-anywhere' awareness for
+   OPTIONS APPEND-ONLY DONE (2026-08-04): enforced at the single chokepoint
+   `persistChoiceOptionsDraft` (every options-editor mutation funnels through it) via a
+   set-difference check — any previously-persisted option VALUE missing from the next set is
+   blocked with a message and the draft rows re-sync to the persisted options.
+   BLOCKED on shared-bound fields: removing an option row (X button); renaming an option's
+   canonical value (Value input); editing the Label of a row whose Value column is blank (there
+   the label IS the canonical value). ALLOWED: adding new options (+ Add another); Up/Down
+   reordering (order is not identity); Label edits on rows with an explicit Value (stored in
+   optionLabels, not options); Score edits (optionScores).
+   STILL OPEN (tracked, not step 9's scope anymore): 'published-anywhere' awareness for
    NON-shared fields (needs published-usage data the widget doesn't have yet — could ride the
    TemplateField datasource). Runtime test pending (needs a template with a shared-bound field).
+
+## AnswersJson contract
+The serialized answers object (written to `formDataAttr`) is a FLAT map keyed by field key.
+- Keys: field keys, charset `[a-zA-Z0-9_]` (normalizeKey output). `__sectionVisibility` is a
+  reserved widget-internal key (section-rule state) and is NOT an answer.
+- Values: string | number | boolean | string[] | array of flat row objects. Consumers stringify
+  values as needed — the widget does not pre-stringify scalars.
+- Multi-select fields: encoded as a string array of option values.
+- Datagrid / repeat-group fields: encoded as an array of row objects; each row is itself a flat
+  {columnKey: scalar} map (no deeper nesting).
+- No other top-level non-array objects are allowed; `assertAnswersShape` warns (once per key per
+  session) when one appears, but currently keeps the value (warn-only, hard enforcement deferred).
+- Server consumers depending on this shape: FormAnswer materialization, carry-forward probes, and
+  required-count checks.
 
 ## Build/deploy
 npm install; npm run build → dist/<version>/olari.FormStudioBuilder.mpk (also auto-copied to the
