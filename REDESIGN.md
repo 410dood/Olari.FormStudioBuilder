@@ -148,6 +148,24 @@ manual nested binding: systemSectionDataJsonAttr inside Form context (Studio Pro
 still blocked: BuildCatalogJson (PrepareForDesigner writes TokenCatalogJson), BuildSnippetsJson
 (ACT_FormDocument_Open + Form_Editor_Tabs_2 still on old widget).
 
+## QA fixes 2026-08-04
+- Snippets popover close-on-blur: SnippetsLayer now closes on any outside pointerdown
+  (document-level capture listener while open; clicks inside the portaled popover/trigger root are
+  ignored, a click on the target field just closes the popover), closes when focus lands outside the
+  popover/target field (document-level focusin — container focusout never fires once focus is inside
+  the portal), and clears fully when the target field unmounts (MutationObserver on the widget
+  container). Esc/Enter/arrow behavior unchanged. Fixes the popover lingering through sign/void
+  flows and matching [role=dialog] queries while stale.
+- Viewer a11y label associations: custom widgets now carry the RJSF field id so the library-rendered
+  <label for=...> resolves — SignatureWidget (id on canvas in draw mode, id+name on the typed-name
+  input in type mode), ContentBlockWidget and SystemDatagrid2PlaceholderWidget (id on root div).
+  MatrixGridField title was a <label> associated with nothing → now a span with a stable
+  `${fieldId}__title` id referenced by role="group" + aria-labelledby on the matrix container
+  (radio cells keep their aria-labels). Snippets search input gained name + aria-label. Not fixable
+  here: label-for on RJSF's own radio/checkboxes groups points at the library's container div, and
+  matrix radios have no per-cell <label> elements (aria-label only) — both are @rjsf/core rendering,
+  out of widget scope without restructuring.
+
 ## Build/deploy
 npm install; npm run build → dist/<version>/olari.FormStudioBuilder.mpk (also auto-copied to the
 Mendix project's widgets/ if configured). Deploy: copy .mpk to Olari-main/widgets, F5 in Studio Pro.

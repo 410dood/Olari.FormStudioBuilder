@@ -6242,7 +6242,7 @@ function SystemDatagrid2PlaceholderWidget(props: any): ReactElement {
 
   if (widgetContent) {
     return (
-      <div className="rjsf-builder__system-template-placeholder">
+      <div id={props?.id} className="rjsf-builder__system-template-placeholder">
         <div className="rjsf-builder__system-template-placeholder__title">
           {label}
         </div>
@@ -6259,7 +6259,7 @@ function SystemDatagrid2PlaceholderWidget(props: any): ReactElement {
 
   if (slotHtml) {
     return (
-      <div className="rjsf-builder__system-template-placeholder">
+      <div id={props?.id} className="rjsf-builder__system-template-placeholder">
         <div className="rjsf-builder__system-template-placeholder__title">
           {label}
         </div>
@@ -6276,7 +6276,7 @@ function SystemDatagrid2PlaceholderWidget(props: any): ReactElement {
   }
 
   return (
-    <div className="rjsf-builder__system-template-placeholder">
+    <div id={props?.id} className="rjsf-builder__system-template-placeholder">
       <div className="rjsf-builder__system-template-placeholder__title">
         {label}
       </div>
@@ -6356,13 +6356,21 @@ function MatrixGridField(props: any): ReactElement {
       props.onChange(nextValue);
     }
   };
+  const showTitle = Boolean(!hideLabel && title);
   return (
-    <div className="rjsf-builder__matrix">
-      {!hideLabel && title ? (
-        <label className="control-label rjsf-builder__matrix-title">
+    <div
+      className="rjsf-builder__matrix"
+      role="group"
+      aria-labelledby={showTitle ? `${fieldId}__title` : undefined}
+    >
+      {showTitle ? (
+        <span
+          id={`${fieldId}__title`}
+          className="control-label rjsf-builder__matrix-title"
+        >
           {title}
           {props?.required ? <span className="required">{" *"}</span> : null}
-        </label>
+        </span>
       ) : null}
       {description ? (
         <div className="rjsf-builder__matrix-description">{description}</div>
@@ -6437,17 +6445,21 @@ function ContentBlockWidget(props: any): ReactElement {
   if (!clean(contentText)) {
     if (formContext?.previewReorderEnabled) {
       return (
-        <div className="rjsf-builder__content-block rjsf-builder__content-block--empty">
+        <div
+          id={props?.id}
+          className="rjsf-builder__content-block rjsf-builder__content-block--empty"
+        >
           Content block: add text in the Properties panel.
         </div>
       );
     }
-    return <div className="rjsf-builder__content-block" />;
+    return <div id={props?.id} className="rjsf-builder__content-block" />;
   }
   const tokens = formContext?.contentBlockTokens || {};
   const html = asHtmlSnippet(replaceOutputTokens(contentText, tokens));
   return (
     <div
+      id={props?.id}
       className="rjsf-builder__content-block"
       dangerouslySetInnerHTML={{ __html: html }}
     />
@@ -6658,6 +6670,7 @@ function SignatureWidget(props: any): ReactElement {
       </div>{" "}
       <canvas
         ref={canvasRef}
+        id={mode === "draw" ? props?.id : undefined}
         width={420}
         height={120}
         className="rjsf-builder__signature-canvas"
@@ -6672,6 +6685,8 @@ function SignatureWidget(props: any): ReactElement {
           {" "}
           <input
             type="text"
+            id={props?.id}
+            name={props?.id}
             className="rjsf-builder__input"
             placeholder="Type full name"
             value={typedName}
@@ -8531,13 +8546,76 @@ function SnippetsLayer(props: SnippetsLayerProps): ReactElement | null {
       return;
     }
     const reposition = () => setPositionTick((tick) => tick + 1);
+    // Close everything when the target field is removed from the DOM (for
+    // example a sign/void flow swaps the form out). Container-level focusout
+    // cannot catch this once focus lives inside the portaled popover.
+    const observer = new MutationObserver(() => {
+      const current = fieldRef.current;
+      if (current && !current.isConnected) {
+        clearAll();
+      }
+    });
+    observer.observe(containerRef.current || document.body, {
+      childList: true,
+      subtree: true
+    });
     window.addEventListener("scroll", reposition, true);
     window.addEventListener("resize", reposition);
     return () => {
+      observer.disconnect();
       window.removeEventListener("scroll", reposition, true);
       window.removeEventListener("resize", reposition);
     };
-  }, [field, clearAll]);
+  }, [field, clearAll, containerRef]);
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const isInsideUi = (node: unknown): boolean => {
+      const root = uiRootRef.current;
+      return Boolean(root && node instanceof Node && root.contains(node));
+    };
+    const isTargetField = (node: unknown): boolean => {
+      const target = fieldRef.current;
+      return Boolean(
+        target &&
+          node instanceof Node &&
+          (node === target || target.contains(node))
+      );
+    };
+    // Close on any outside pointerdown while open; clicks inside the popover
+    // (or on the trigger, which shares uiRootRef) are ignored.
+    const handleDocumentPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (isInsideUi(target)) {
+        return;
+      }
+      if (isTargetField(target)) {
+        closePopover(false);
+        return;
+      }
+      clearAll();
+    };
+    // Close when focus lands anywhere outside the popover and target field
+    // (document-level: container focusout never fires once focus is portaled).
+    const handleDocumentFocusIn = (event: FocusEvent) => {
+      const target = event.target;
+      if (isInsideUi(target) || isTargetField(target)) {
+        return;
+      }
+      clearAll();
+    };
+    document.addEventListener("pointerdown", handleDocumentPointerDown, true);
+    document.addEventListener("focusin", handleDocumentFocusIn, true);
+    return () => {
+      document.removeEventListener(
+        "pointerdown",
+        handleDocumentPointerDown,
+        true
+      );
+      document.removeEventListener("focusin", handleDocumentFocusIn, true);
+    };
+  }, [open, closePopover, clearAll]);
   useEffect(() => {
     if (open) {
       const frame = window.requestAnimationFrame(() => {
@@ -8671,6 +8749,8 @@ function SnippetsLayer(props: SnippetsLayerProps): ReactElement | null {
             ref={searchRef}
             type="text"
             className="rjsf-snippets__search"
+            name="rjsf-snippets-search"
+            aria-label="Search snippets"
             placeholder="Search snippets…"
             value={query}
             onChange={(event) => {
