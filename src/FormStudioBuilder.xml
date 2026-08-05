@@ -459,6 +459,15 @@
             </attributeTypes>
         </property>
 
+        <property key="signatureImageAttr" type="attribute" required="false">
+            <caption>Signature image (base64)</caption>
+            <category>Data</category>
+            <description>Signature-image mode: when bound, the widget renders ONLY this attribute as an inline PNG image (data-URI or raw base64; nothing renders when empty or too short, e.g. typed-only signatures) and skips all form machinery. Used inside the PDF signature block.</description>
+            <attributeTypes>
+                <attributeType name="String" />
+            </attributeTypes>
+        </property>
+
         <systemProperty key="Editability" />
     </properties>
 </widget>

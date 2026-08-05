@@ -182,6 +182,7 @@ export interface FormStudioBuilderProps {
   snippetTextAttr?: ListAttributeValue<string>;
   snippetScopeAttr?: ListAttributeValue<string>;
   toastMessageAttr?: EditableValue<string>;
+  signatureImageAttr?: EditableValue<string>;
   viewMode?: ViewMode;
   showPalettePanel?: boolean | DynamicValue<boolean>;
   showComponentsPanel?: boolean | DynamicValue<boolean>;
@@ -8889,9 +8890,36 @@ function WidgetToasts({ attr }: { attr?: EditableValue<string> }): ReactElement 
     </div>
   );
 }
+function SignatureImageView({
+  attr
+}: {
+  attr: EditableValue<string>;
+}): ReactElement {
+  const raw = (attr.value ?? "").trim();
+  // Typed-only signatures store no/short image data — render nothing so the
+  // script-font name in .fs-pdf-sig-box stays the visible signature.
+  if (raw.length <= 100) {
+    return <Fragment />;
+  }
+  const src = raw.startsWith("data:") ? raw : `data:image/png;base64,${raw}`;
+  return (
+    <img
+      className="fs-sig-image"
+      src={src}
+      alt="Signature"
+      style={{ maxHeight: 80, display: "block" }}
+    />
+  );
+}
+
 export default function FormStudioBuilder(
   props: FormStudioBuilderProps
 ): ReactElement {
+  // Signature-image mode: the binding is fixed at design time, so this branch
+  // never flips at runtime and the hook order below stays stable.
+  if (props.signatureImageAttr) {
+    return <SignatureImageView attr={props.signatureImageAttr} />;
+  }
   const source = props.dataSource?.[0];
   const [definition, setDefinition] = useState<FormDefinition>(DEFAULT_FORM);
   const [formData, setFormData] = useState<JsonObject>({});
