@@ -103,22 +103,6 @@
                         <attributeType name="String" />
                     </attributeTypes>
                 </property>
-                <property key="formSchemaAttr" type="attribute" required="false">
-                    <caption>Derived schema JSON</caption>
-                    <category>Data</category>
-                    <description>Optional attribute to store generated JSON Schema.</description>
-                    <attributeTypes>
-                        <attributeType name="String" />
-                    </attributeTypes>
-                </property>
-                <property key="formUiSchemaAttr" type="attribute" required="false">
-                    <caption>Derived uiSchema JSON</caption>
-                    <category>Data</category>
-                    <description>Optional attribute to store generated RJSF uiSchema.</description>
-                    <attributeTypes>
-                        <attributeType name="String" />
-                    </attributeTypes>
-                </property>
                 <property key="fieldCountAttr" type="attribute" required="false">
                     <caption>Field count</caption>
                     <category>Data</category>

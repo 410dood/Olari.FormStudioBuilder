@@ -149,8 +149,6 @@ interface DataSourceItem {
   resolvedOutputHtmlAttr?: EditableValue<string>;
   resolvedPdfHtmlAttr?: EditableValue<string>;
   formDataAttr?: EditableValue<string>;
-  formSchemaAttr?: EditableValue<string>;
-  formUiSchemaAttr?: EditableValue<string>;
   fieldCountAttr?: EditableValue<Big>;
   requiredFieldCountAttr?: EditableValue<Big>;
   sectionCountAttr?: EditableValue<Big>;
@@ -9321,14 +9319,6 @@ export default function FormStudioBuilder(
         2
       );
       writeAttribute(source?.formDataAttr, nextDataJson);
-      writeAttribute(
-        source?.formSchemaAttr,
-        JSON.stringify(buildSchema(nextDefinition), null, 2)
-      );
-      writeAttribute(
-        source?.formUiSchemaAttr,
-        JSON.stringify(buildUiSchema(nextDefinition), null, 2)
-      );
       if (triggerChange) {
         runAction(source?.onChangeAction);
       }
@@ -9340,8 +9330,6 @@ export default function FormStudioBuilder(
       source?.resolvedOutputHtmlAttr,
       source?.resolvedPdfHtmlAttr,
       source?.formDataAttr,
-      source?.formSchemaAttr,
-      source?.formUiSchemaAttr,
       source?.onChangeAction,
       tokenContext,
       systemSectionHtmlBySlot
