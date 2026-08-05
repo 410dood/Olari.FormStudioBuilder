@@ -468,6 +468,12 @@
             </attributeTypes>
         </property>
 
+        <property key="designerHeaderWidget" type="widgets" required="false">
+            <caption>Designer header widget</caption>
+            <category>Behavior</category>
+            <description>Optional Mendix widgets rendered in the designer toolbar right after the Save button (e.g. the page's Publish/Close buttons).</description>
+        </property>
+
         <systemProperty key="Editability" />
     </properties>
 </widget>

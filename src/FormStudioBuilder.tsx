@@ -197,6 +197,7 @@ export interface FormStudioBuilderProps {
   saveButtonText?: string;
   exportPdfButtonText?: string;
   viewerHeaderWidget?: ReactNode;
+  designerHeaderWidget?: ReactNode;
   viewerThemePreset?: ThemePreset;
   activeMedicationsDatagrid2?: ReactNode;
   activeAllergiesDatagrid2?: ReactNode;
@@ -11960,6 +11961,12 @@ export default function FormStudioBuilder(
               {" "}
               {clean(props.saveButtonText) || "Save form"}{" "}
             </button>{" "}
+            {!isViewer && props.designerHeaderWidget ? (
+              <div className="rjsf-builder__toolbar-slot rjsf-builder__toolbar-slot--designer">
+                {" "}
+                {props.designerHeaderWidget}{" "}
+              </div>
+            ) : null}{" "}
             {isViewer && source?.onExportPdfAction ? (
               <button
                 type="button"
