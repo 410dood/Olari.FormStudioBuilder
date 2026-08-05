@@ -2019,31 +2019,34 @@ function getDefaultDocumentOutputTemplate(component: FormComponent): string {
   if (component.type === "contentBlock") {
     return str(component.contentText);
   }
-  const labelToken = `{${component.key}_label}`;
+  // Default narrative mirrors the legacy PDF generator: bold label, answer
+  // inline on the same line. {\b ...} is the template bold syntax handled by
+  // asHtmlSnippet (tokens are replaced before the RTF-style pass runs).
+  const labelToken = `{\\b {${component.key}_label}:}`;
   if (component.type === "matrix") {
     const rows = getMatrixRows(component);
     const rowLines = rows
       .map(
         (row) =>
-          `{${component.key}_${row.key}_label}: {${component.key}_${row.key}}`
+          `{\\b {${component.key}_${row.key}_label}:} {${component.key}_${row.key}}`
       )
       .join("\n");
     return rowLines
-      ? `${labelToken}:\n${rowLines}`
-      : `${labelToken}:\n{${component.key}}`;
+      ? `${labelToken}\n${rowLines}`
+      : `${labelToken} {${component.key}}`;
   }
   if (component.type === "datagrid") {
     const columns =
       normalizeDataGridColumns(component.datagridColumns) ||
       createDefaultDataGridColumns(component.key);
     const rowTemplate = columns
-      .map((column) => `{${column.key}_label}: {${column.key}}`)
+      .map((column) => `{\\b {${column.key}_label}:} {${column.key}}`)
       .join("\n");
     return rowTemplate
-      ? `${labelToken}:\n${rowTemplate}`
-      : `${labelToken}:\n{${component.key}}`;
+      ? `${labelToken}\n${rowTemplate}`
+      : `${labelToken} {${component.key}}`;
   }
-  return `${labelToken}:\n{${component.key}}`;
+  return `${labelToken} {${component.key}}`;
 }
 function getEffectiveDocumentOutputTemplate(component: FormComponent): string {
   return hasExplicitDocumentOutputTemplate(component)
@@ -2116,6 +2119,13 @@ function buildTokenScope(
   });
   return scope;
 }
+// Authored labels often end with ":" while output templates add their own
+// ("{\b {key_label}:} {key}") — strip it from the token value so narratives
+// never print "Label::". Form rendering uses component.label directly and is
+// unaffected.
+function stripTrailingColon(value: string): string {
+  return str(value).replace(/\s*:\s*$/, "");
+}
 function buildFormTokenValues(
   definition: FormDefinition,
   data: JsonObject
@@ -2131,7 +2141,7 @@ function buildFormTokenValues(
     addToken(
       tokens,
       `${component.key}_label`,
-      component.label || component.key
+      stripTrailingColon(component.label || component.key)
     );
     if (component.type === "matrix") {
       const rows = getMatrixRows(component);
@@ -2145,7 +2155,7 @@ function buildFormTokenValues(
         addToken(
           tokens,
           `${component.key}_${row.key}_label`,
-          row.label || row.key
+          stripTrailingColon(row.label || row.key)
         );
       });
     }
@@ -2164,7 +2174,7 @@ function buildFormTokenValues(
         addToken(
           tokens,
           `${component.key}_${column.key}_label`,
-          column.label || column.key
+          stripTrailingColon(column.label || column.key)
         );
       });
     }
@@ -2198,12 +2208,16 @@ function resolveDataGridTemplateHtml(
       }
       columns.forEach((column) => {
         addToken(rowTokens, column.key, row[column.key]);
-        addToken(rowTokens, `${column.key}_label`, column.label || column.key);
+        addToken(
+          rowTokens,
+          `${column.key}_label`,
+          stripTrailingColon(column.label || column.key)
+        );
         addToken(rowTokens, `${component.key}_${column.key}`, row[column.key]);
         addToken(
           rowTokens,
           `${component.key}_${column.key}_label`,
-          column.label || column.key
+          stripTrailingColon(column.label || column.key)
         );
       });
       return asHtmlSnippet(replaceOutputTokens(template, rowTokens));
@@ -2275,7 +2289,16 @@ function asHtmlSnippet(value: string): string {
     return "";
   }
   if (/<\/?[a-z][\s\S]*>/i.test(trimmed)) {
-    return trimmed;
+    // Only fully-authored HTML (block-level tags) skips the paragraph wrapper.
+    // Inline-only markup (e.g. <strong> from {\b ...}) still needs the <p> and
+    // newline conversion or consecutive field snippets collapse onto one line.
+    const hasBlockTags =
+      /<\/?(p|div|h[1-6]|ul|ol|li|table|thead|tbody|tr|td|th|section|article|header|footer|figure|blockquote|pre|hr|dl|dt|dd|img|svg|canvas)\b/i.test(
+        trimmed
+      );
+    if (hasBlockTags) {
+      return trimmed;
+    }
   }
   return `<p>${trimmed.replace(/\r?\n/g, "<br />")}</p>`;
 }
@@ -9819,7 +9842,7 @@ export default function FormStudioBuilder(
           addToken(
             tokenValues,
             `${column.key}_label`,
-            column.label || column.key
+            stripTrailingColon(column.label || column.key)
           );
           addToken(
             tokenValues,
