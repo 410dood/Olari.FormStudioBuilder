@@ -87,14 +87,6 @@
                         <attributeType name="String" />
                     </attributeTypes>
                 </property>
-                <property key="systemSectionHtmlJsonAttr" type="attribute" required="false">
-                    <caption>System section HTML JSON</caption>
-                    <category>Data</category>
-                    <description>Optional String/LongString JSON object keyed by system template slot property. Each value should contain print-ready HTML to inject into the PDF output for that system section.</description>
-                    <attributeTypes>
-                        <attributeType name="String" />
-                    </attributeTypes>
-                </property>
                 <property key="formDataAttr" type="attribute" required="false">
                     <caption>Form data JSON</caption>
                     <category>Data</category>

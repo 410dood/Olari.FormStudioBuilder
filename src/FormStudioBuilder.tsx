@@ -144,7 +144,6 @@ interface DataSourceItem {
   snippetsJsonAttr?: EditableValue<string>;
   tokenCatalogSchemaJsonAttr?: EditableValue<string>;
   systemTemplatesConfigJsonAttr?: EditableValue<string>;
-  systemSectionHtmlJsonAttr?: EditableValue<string>;
   systemSectionDataJsonAttr?: EditableValue<string>;
   resolvedOutputHtmlAttr?: EditableValue<string>;
   resolvedPdfHtmlAttr?: EditableValue<string>;
@@ -1566,50 +1565,12 @@ interface SharedFieldCatalogEntry {
   sourceCode: string;
   sourceKey: string;
 }
-function parseSystemSectionHtmlJson(raw?: string): Record<string, string> {
-  if (!clean(raw)) {
-    return {};
-  }
-  try {
-    const parsed = JSON.parse(raw as string);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return {};
-    }
-    const next: Record<string, string> = {};
-    Object.entries(parsed as Record<string, unknown>).forEach(
-      ([key, value]) => {
-        const normalizedKey = clean(key);
-        if (!normalizedKey) {
-          return;
-        }
-        if (typeof value === "string") {
-          const html = value.trim();
-          if (html) {
-            next[normalizedKey] = html;
-            next[normalizedKey.toLowerCase()] = html;
-          }
-          return;
-        }
-        if (value && typeof value === "object" && !Array.isArray(value)) {
-          const html = clean((value as Record<string, unknown>).html);
-          if (html) {
-            next[normalizedKey] = html;
-            next[normalizedKey.toLowerCase()] = html;
-          }
-        }
-      }
-    );
-    return next;
-  } catch (_error) {
-    return {};
-  }
-}
 // System sections as DATA rows (redesign step 3). The server ships
 // {slotKey: {title?, columns, rows, emptyText?, meta?}} and the widget renders
 // the table itself — every cell goes through escapeHtml, so injection is
 // impossible by construction. Emits the same fs-live-vitals markup/classes the
 // legacy server HTML used, so existing styling and the PDF pipeline are
-// unchanged. Slots present here OVERRIDE the legacy HTML JSON.
+// unchanged. Sole system-section channel since 0.2.2 (legacy HTML prop removed).
 function renderSystemSectionDataToHtml(raw?: string): Record<string, string> {
   if (!clean(raw)) {
     return {};
@@ -9191,15 +9152,8 @@ export default function FormStudioBuilder(
     [tokenContextFromJson, tokenContextFromDatasource]
   );
   const systemSectionHtmlBySlot = useMemo(
-    () => ({
-      // Legacy server-rendered HTML first; data-rows slots override it.
-      ...parseSystemSectionHtmlJson(source?.systemSectionHtmlJsonAttr?.value),
-      ...renderSystemSectionDataToHtml(source?.systemSectionDataJsonAttr?.value)
-    }),
-    [
-      source?.systemSectionHtmlJsonAttr?.value,
-      source?.systemSectionDataJsonAttr?.value
-    ]
+    () => renderSystemSectionDataToHtml(source?.systemSectionDataJsonAttr?.value),
+    [source?.systemSectionDataJsonAttr?.value]
   );
   const tokenCatalog = useMemo(() => {
     // Datasource wins when configured; the JSON attribute is the deprecated

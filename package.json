@@ -1,7 +1,7 @@
 {
     "name": "olari.FormStudioBuilder",
     "widgetName": "FormStudioBuilder",
-    "version": "0.2.1",
+    "version": "0.2.2",
     "description": "Mendix pluggable widget for designing, viewing, document output, and PDF-ready rendering of JSON forms with RJSF.",
     "author": "Recovered from packaged widget",
     "license": "MIT",
