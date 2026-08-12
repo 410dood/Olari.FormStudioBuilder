@@ -12220,23 +12220,10 @@ export default function FormStudioBuilder(
             </aside>
           ) : null}{" "}
           <div className="rjsf-builder__viewer" ref={viewerFillRef}>
+            {/* in-viewer "Jump to next required" bar removed 2026-08-12: the
+                FormStudio editor page renders its own jump button in the
+                Sections panel, so this one was a duplicate (Bill request). */}
             {" "}
-            {!showViewerComponentsPanel && firstMissingRequired ? (
-              <div className="rjsf-builder__jump-required-bar">
-                {" "}
-                <button
-                  type="button"
-                  className="rjsf-builder__button rjsf-builder__button--small"
-                  onClick={jumpToNextRequired}
-                  title={`Scroll to "${
-                    firstMissingRequired.label || firstMissingRequired.key
-                  }"`}
-                >
-                  {" "}
-                  Jump to next required{" "}
-                </button>{" "}
-              </div>
-            ) : null}{" "}
             <Form
               schema={schema as any}
               uiSchema={uiSchema as any}
