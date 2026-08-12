@@ -1854,6 +1854,51 @@ function applyTokenPrefill(
   });
   return next || data;
 }
+// Keys seeded from the chart THIS session: empty in the saved answers but
+// carrying the token value in the displayed (post-prefill) data. Strict on
+// purpose — claiming a hand-entered value came from the chart is worse for
+// provenance than dropping the caption once the answer persists.
+function computePrefilledKeys(
+  savedData: JsonObject,
+  displayedData: JsonObject,
+  definition: FormDefinition,
+  tokenValues: Record<string, string>
+): Set<string> {
+  const keys = new Set<string>();
+  definition.components.forEach((component) => {
+    const tokenKey =
+      clean(component.prefillTokenKey) || clean(component.sharedFieldRef);
+    if (
+      !tokenKey ||
+      TOKEN_PREFILL_EXCLUDED_TYPES.has(component.type) ||
+      component.multiSelect ||
+      component.repeatGroup
+    ) {
+      return;
+    }
+    if (hasExistingAnswer(savedData[component.key])) {
+      return;
+    }
+    const resolvedRaw = resolveTokenValue(tokenKey, tokenValues);
+    if (!clean(resolvedRaw)) {
+      return;
+    }
+    const coerced = coerceTokenPrefillValue(component, resolvedRaw);
+    if (coerced === undefined) {
+      return;
+    }
+    const current = displayedData[component.key];
+    if (
+      current === coerced ||
+      (current != null && String(current) === String(coerced))
+    ) {
+      keys.add(component.key);
+    }
+  });
+  return keys;
+}
+// Stable identity for the disabled path so downstream memos don't churn.
+const EMPTY_PREFILLED_KEYS: ReadonlySet<string> = new Set<string>();
 function replaceOutputTokens(
   template: string,
   tokenValues: Record<string, string>
@@ -6994,6 +7039,18 @@ function ObjectTemplate(props: any): ReactElement {
     onPreviewOpenDataGridSettings?: (key: string) => void;
     previewScrollToSectionKey?: string;
     previewScrollRequest?: number;
+    sectionStatsByKey?: Record<
+      string,
+      {
+        reqTotal: number;
+        reqDone: number;
+        prefilled: number;
+        fields: number;
+        completed: number;
+      }
+    >;
+    activeSectionKey?: string;
+    onActiveSectionChange?: (sectionKey: string) => void;
   };
   const snapToGrid = formContext.snapToGrid !== false;
   const snapToResize = formContext.snapToResize !== false;
@@ -7306,6 +7363,78 @@ function ObjectTemplate(props: any): ReactElement {
       return next;
     });
   }, [collapsibleSectionKeySet, orderedSections]);
+  // Report which group box is currently most visible so the viewer nav rail
+  // can highlight it while the user scrolls. Root template only; observers
+  // are per widget instance (sectionRefs are instance-local).
+  const onActiveSectionChange = formContext.onActiveSectionChange;
+  const orderedSectionKeySignature = orderedSections
+    .map((section) => section.key)
+    .join("\u0001");
+  useEffect(() => {
+    if (
+      !isRootObjectTemplate ||
+      typeof onActiveSectionChange !== "function" ||
+      typeof IntersectionObserver === "undefined"
+    ) {
+      return;
+    }
+    const nodes = orderedSectionKeySignature
+      .split("\u0001")
+      .filter(Boolean)
+      // Switch-hidden sections have no rail row, so they must not win the
+      // active-section race (their dashed stub still renders at full size).
+      .filter(
+        (key) =>
+          !(
+            sectionSwitchableByKey[key] &&
+            sectionVisibilityByKey[key] === false
+          )
+      )
+      .map((key) => [key, sectionRefs.current[key]] as const)
+      .filter(([, node]) => Boolean(node));
+    if (!nodes.length) {
+      return;
+    }
+    // Rank by visible height in pixels, not intersectionRatio: ratio biases
+    // toward short boxes (a fully-visible stub beats a tall section filling
+    // the viewport) and makes very tall sections unreachable.
+    const visiblePx = new Map<string, number>();
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          const key = (entry.target as HTMLElement).dataset.sectionKey;
+          if (!key) {
+            return;
+          }
+          visiblePx.set(
+            key,
+            entry.isIntersecting ? entry.intersectionRect.height : 0
+          );
+        });
+        let bestKey = "";
+        let bestPx = 0;
+        nodes.forEach(([key]) => {
+          const px = visiblePx.get(key) || 0;
+          if (px > bestPx) {
+            bestPx = px;
+            bestKey = key;
+          }
+        });
+        // Empty string clears the highlight when no section is on screen
+        // (keeps multiple ListView instances from all showing an active row).
+        onActiveSectionChange(bestKey);
+      },
+      { threshold: [0, 0.05, 0.1, 0.2, 0.35, 0.5, 0.65, 0.8, 0.95, 1] }
+    );
+    nodes.forEach(([, node]) => observer.observe(node as HTMLDivElement));
+    return () => observer.disconnect();
+  }, [
+    isRootObjectTemplate,
+    onActiveSectionChange,
+    orderedSectionKeySignature,
+    sectionSwitchableByKey,
+    sectionVisibilityByKey
+  ]);
   const canAcceptPreviewDrop = Boolean(
     onPreviewReorder || onPreviewDropField || onPreviewMoveComponent
   );
@@ -7761,6 +7890,15 @@ function ObjectTemplate(props: any): ReactElement {
           isRootObjectTemplate &&
           previewSectionSettingsEnabled &&
           Boolean(onPreviewUpdateSectionSettings);
+        // Root only: nested ObjectTemplates (repeat-group rows) share the same
+        // section keys, and whole-section aggregates are wrong at row scope.
+        const sectionStats = isRootObjectTemplate
+          ? formContext.sectionStatsByKey?.[section.key]
+          : undefined;
+        const sectionIsActive =
+          isRootObjectTemplate &&
+          Boolean(formContext.activeSectionKey) &&
+          formContext.activeSectionKey === section.key;
         return (
           <div
             key={section.key}
@@ -7768,6 +7906,10 @@ function ObjectTemplate(props: any): ReactElement {
               sectionRefs.current[section.key] = node;
             }}
             data-section-key={section.key}
+            data-req-total={sectionStats ? String(sectionStats.reqTotal) : undefined}
+            data-req-done={sectionStats ? String(sectionStats.reqDone) : undefined}
+            data-prefilled={sectionStats ? String(sectionStats.prefilled) : undefined}
+            data-active={sectionIsActive ? "true" : undefined}
             className={`rjsf-builder__section${
               section.title
                 ? " rjsf-builder__section--titled"
@@ -7794,6 +7936,26 @@ function ObjectTemplate(props: any): ReactElement {
                   {" "}
                   {section.title}{" "}
                 </div>{" "}
+                {sectionStats ? (
+                  <div className="rjsf-builder__section-meta">
+                    {[
+                      sectionStats.reqTotal > 0
+                        ? `${sectionStats.reqTotal} required`
+                        : "",
+                      `${sectionStats.fields} field${
+                        sectionStats.fields === 1 ? "" : "s"
+                      }`,
+                      sectionStats.prefilled > 0
+                        ? `${sectionStats.prefilled} prefilled from chart`
+                        : "",
+                      sectionStats.fields > 0 && sectionStats.completed === 0
+                        ? "not started"
+                        : ""
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </div>
+                ) : null}{" "}
                 <div className="rjsf-builder__section-actions">
                   {" "}
                   {sectionCanMove ? (
@@ -8982,6 +9144,19 @@ export default function FormStudioBuilder(
   const [jsonDataDraft, setJsonDataDraft] = useState<string>("");
   const [jsonMessage, setJsonMessage] = useState<string>("");
   const [leftPanelCollapsed, setLeftPanelCollapsed] = useState<boolean>(false);
+  // Group key currently in view (viewer mode) — highlights the nav rail row.
+  const [activeViewerSectionKey, setActiveViewerSectionKey] = useState<
+    string | null
+  >(null);
+  // While a rail click's smooth scroll is in flight, observer callbacks fire
+  // for every intermediate section; ignore them so the clicked row holds.
+  const suppressActiveUntilRef = useRef<number>(0);
+  const handleActiveSectionChange = useCallback((sectionKey: string) => {
+    if (Date.now() < suppressActiveUntilRef.current) {
+      return;
+    }
+    setActiveViewerSectionKey(sectionKey || null);
+  }, []);
   const [rightPanelCollapsed, setRightPanelCollapsed] =
     useState<boolean>(false);
   const [tokenPreviewMode, setTokenPreviewMode] = useState<"html" | "rendered">(
@@ -9308,6 +9483,13 @@ export default function FormStudioBuilder(
         ? applyTokenPrefill(formData, definition, tokenContext)
         : formData,
     [tokenPrefillEnabled, formData, definition, tokenContext]
+  );
+  const prefilledKeys = useMemo(
+    () =>
+      tokenPrefillEnabled
+        ? computePrefilledKeys(formData, viewerFormData, definition, tokenContext)
+        : EMPTY_PREFILLED_KEYS,
+    [tokenPrefillEnabled, formData, viewerFormData, definition, tokenContext]
   );
   useEffect(() => {
     if (builderTab === "json") {
@@ -10227,6 +10409,24 @@ export default function FormStudioBuilder(
       ),
     [definition.components]
   );
+  const sectionSwitchableByKey = useMemo(
+    () => buildSectionSwitchableMap(definition),
+    [definition]
+  );
+  const sectionVisibilityByKey = useMemo(
+    () => parseSectionVisibilityMap(formData[SECTION_VISIBILITY_DATA_KEY]),
+    [formData]
+  );
+  const isSectionSwitchHidden = useCallback(
+    (section: string | undefined) => {
+      const key = resolveSectionKey(section);
+      return (
+        Boolean(sectionSwitchableByKey[key]) &&
+        sectionVisibilityByKey[key] === false
+      );
+    },
+    [sectionSwitchableByKey, sectionVisibilityByKey]
+  );
   const sectionSummaries = useMemo(() => {
     const summary: Record<
       string,
@@ -10255,8 +10455,12 @@ export default function FormStudioBuilder(
         completedCount: number;
         requiredCount: number;
         requiredIncompleteCount: number;
+        prefilledCount: number;
+        renderedCount: number;
       }
     > = {};
+    // Counts run against viewerFormData (token prefill applied) so the rail
+    // agrees with what the user sees before the first autosave lands.
     definition.components.forEach((component, index) => {
       const normalizedSection = normalizeSectionName(component.section);
       const sectionKey = normalizedSection || "__default";
@@ -10270,19 +10474,34 @@ export default function FormStudioBuilder(
           trackableCount: 0,
           completedCount: 0,
           requiredCount: 0,
-          requiredIncompleteCount: 0
+          requiredIncompleteCount: 0,
+          prefilledCount: 0,
+          renderedCount: 0
         };
       }
       const sectionSummary = summary[sectionKey];
       sectionSummary.count += 1;
+      const isVisible = isComponentVisibleForSummary(
+        component,
+        viewerFormData,
+        componentsByKey
+      );
+      if (isVisible) {
+        // Any visible component means the section box actually renders —
+        // rows for fully rule-hidden sections would navigate nowhere.
+        sectionSummary.renderedCount += 1;
+      }
       if (!isTrackableSectionSummaryComponent(component)) {
         return;
       }
-      if (!isComponentVisibleForSummary(component, formData, componentsByKey)) {
+      if (!isVisible) {
         return;
       }
       sectionSummary.trackableCount += 1;
-      const isComplete = hasOutputValue(component, formData);
+      if (prefilledKeys.has(component.key)) {
+        sectionSummary.prefilledCount += 1;
+      }
+      const isComplete = hasOutputValue(component, viewerFormData);
       if (isComplete) {
         sectionSummary.completedCount += 1;
       }
@@ -10304,6 +10523,10 @@ export default function FormStudioBuilder(
             : 100;
         return {
           ...section,
+          requiredCompleteCount:
+            section.requiredCount - section.requiredIncompleteCount,
+          notStarted:
+            section.trackableCount > 0 && section.completedCount === 0,
           displayCount:
             section.trackableCount > 0
               ? `${section.completedCount} of ${section.trackableCount}`
@@ -10312,24 +10535,50 @@ export default function FormStudioBuilder(
           hasWarning: section.requiredIncompleteCount > 0
         };
       });
-  }, [componentsByKey, definition.components, formData]);
+  }, [componentsByKey, definition.components, viewerFormData, prefilledKeys]);
+  const sectionStatsByKey = useMemo(() => {
+    const map: Record<
+      string,
+      {
+        reqTotal: number;
+        reqDone: number;
+        prefilled: number;
+        fields: number;
+        completed: number;
+      }
+    > = {};
+    viewerSectionSummaries.forEach((section) => {
+      map[section.key] = {
+        reqTotal: section.requiredCount,
+        reqDone: section.requiredCompleteCount,
+        prefilled: section.prefilledCount,
+        fields: section.trackableCount,
+        completed: section.completedCount
+      };
+    });
+    return map;
+  }, [viewerSectionSummaries]);
   const overallCompletionPercent = useMemo(() => {
     let trackable = 0;
     let completed = 0;
+    // viewerFormData keeps this consistent with the rail/section counts —
+    // otherwise a prefilled form shows green rows next to a 0% header.
     definition.components.forEach((component) => {
       if (!isTrackableSectionSummaryComponent(component)) {
         return;
       }
-      if (!isComponentVisibleForSummary(component, formData, componentsByKey)) {
+      if (
+        !isComponentVisibleForSummary(component, viewerFormData, componentsByKey)
+      ) {
         return;
       }
       trackable += 1;
-      if (hasOutputValue(component, formData)) {
+      if (hasOutputValue(component, viewerFormData)) {
         completed += 1;
       }
     });
     return trackable > 0 ? Math.round((completed / trackable) * 100) : 100;
-  }, [componentsByKey, definition.components, formData]);
+  }, [componentsByKey, definition.components, viewerFormData]);
   useEffect(() => {
     if (!hasHydratedDefinitionRef.current || !source) {
       return;
@@ -10359,10 +10608,17 @@ export default function FormStudioBuilder(
         (component) =>
           component.required &&
           isTrackableSectionSummaryComponent(component) &&
-          isComponentVisibleForSummary(component, formData, componentsByKey) &&
-          !hasOutputValue(component, formData)
+          // Switch-hidden sections are excluded from output; jumping the
+          // user into their unrendered stub is a dead end.
+          !isSectionSwitchHidden(component.section) &&
+          isComponentVisibleForSummary(
+            component,
+            viewerFormData,
+            componentsByKey
+          ) &&
+          !hasOutputValue(component, viewerFormData)
       ),
-    [definition.components, formData, componentsByKey]
+    [definition.components, viewerFormData, componentsByKey, isSectionSwitchHidden]
   );
   const jumpToNextRequired = useCallback(() => {
     const target = firstMissingRequired;
@@ -11795,14 +12051,6 @@ export default function FormStudioBuilder(
     false
   );
   const formLiveValidate = resolveBooleanSetting(props.formLiveValidate, false);
-  const sectionSwitchableByKey = useMemo(
-    () => buildSectionSwitchableMap(definition),
-    [definition]
-  );
-  const sectionVisibilityByKey = useMemo(
-    () => parseSectionVisibilityMap(formData[SECTION_VISIBILITY_DATA_KEY]),
-    [formData]
-  );
   const onSectionVisibilityChange = useCallback(
     (sectionKey: string, isVisible: boolean) => {
       const normalizedKey = clean(sectionKey);
@@ -11827,6 +12075,22 @@ export default function FormStudioBuilder(
   const showRightPanel = showPropertiesPanel;
   const showViewerComponentsPanel =
     isViewer && showComponentsPanel && showSectionPanel;
+  // Rail rows: keep every group except ones the user hid via the section
+  // switch (those are excluded from output, so navigation to them is noise).
+  const railSections = useMemo(
+    () =>
+      viewerSectionSummaries.filter(
+        (section) =>
+          // No visible component -> no section box in the DOM -> a rail row
+          // would navigate nowhere (fully rule-hidden sections).
+          section.renderedCount > 0 &&
+          !(
+            sectionSwitchableByKey[section.key] &&
+            sectionVisibilityByKey[section.key] === false
+          )
+      ),
+    [viewerSectionSummaries, sectionSwitchableByKey, sectionVisibilityByKey]
+  );
   const layoutColumns = [
     showLeftPanel ? (leftPanelCollapsed ? "42px" : "minmax(220px, 280px)") : "",
     showPreviewPanel ? "minmax(460px, 1fr)" : "",
@@ -12165,42 +12429,60 @@ export default function FormStudioBuilder(
               {!leftPanelCollapsed ? (
                 <div className="rjsf-builder__block">
                   {" "}
-                  {viewerSectionSummaries.length ? (
-                    <div className="rjsf-builder__chips">
+                  {railSections.length ? (
+                    <ul className="rjsf-builder__nav-rail" role="list">
                       {" "}
-                      {viewerSectionSummaries.map((section) => (
-                        <button
-                          key={section.key}
-                          type="button"
-                          className={`rjsf-builder__chip rjsf-builder__chip--interactive${
-                            section.hasWarning
-                              ? " rjsf-builder__chip--warning"
-                              : ""
-                          }`}
-                          onClick={() => scrollPreviewToSection(section.key)}
-                          title={
-                            section.trackableCount > 0
-                              ? section.hasWarning
-                                ? `${section.name}: ${
-                                    section.completedCount
-                                  } of ${section.trackableCount} completed (${
-                                    section.completionPercent
-                                  }%). ${
-                                    section.requiredIncompleteCount
-                                  } required field${
-                                    section.requiredIncompleteCount === 1
-                                      ? ""
-                                      : "s"
-                                  } still incomplete.`
-                                : `${section.name}: ${section.completedCount} of ${section.trackableCount} completed (${section.completionPercent}%).`
-                              : `Scroll to ${section.name}`
-                          }
-                        >
-                          {" "}
-                          {section.name}: {section.displayCount}{" "}
-                        </button>
+                      {railSections.map((section) => (
+                        <li key={section.key}>
+                          <button
+                            type="button"
+                            className={`rjsf-builder__nav-item${
+                              activeViewerSectionKey === section.key
+                                ? " is-active"
+                                : ""
+                            }${
+                              section.hasWarning ? " has-todo" : ""
+                            }${
+                              section.requiredCount > 0 && !section.hasWarning
+                                ? " is-done"
+                                : ""
+                            }`}
+                            onClick={() => {
+                              suppressActiveUntilRef.current =
+                                Date.now() + 1000;
+                              setActiveViewerSectionKey(section.key);
+                              scrollPreviewToSection(section.key);
+                            }}
+                            title={
+                              section.trackableCount > 0
+                                ? section.hasWarning
+                                  ? `${section.name}: ${
+                                      section.completedCount
+                                    } of ${section.trackableCount} completed (${
+                                      section.completionPercent
+                                    }%). ${
+                                      section.requiredIncompleteCount
+                                    } required field${
+                                      section.requiredIncompleteCount === 1
+                                        ? ""
+                                        : "s"
+                                    } still incomplete.`
+                                  : `${section.name}: ${section.completedCount} of ${section.trackableCount} completed (${section.completionPercent}%).`
+                                : `Scroll to ${section.name}`
+                            }
+                          >
+                            <span className="rjsf-builder__nav-name">
+                              {section.name}
+                            </span>
+                            <span className="rjsf-builder__nav-count">
+                              {section.requiredCount > 0
+                                ? `${section.requiredCompleteCount}/${section.requiredCount}`
+                                : "–"}
+                            </span>
+                          </button>
+                        </li>
                       ))}{" "}
-                    </div>
+                    </ul>
                   ) : null}{" "}
                   {firstMissingRequired ? (
                     <button
@@ -12258,6 +12540,12 @@ export default function FormStudioBuilder(
                 previewScrollRequest: showViewerComponentsPanel
                   ? previewScrollRequest
                   : 0,
+                sectionStatsByKey,
+                activeSectionKey: activeViewerSectionKey || undefined,
+                // Always on in viewer: the page-level rail reads the active
+                // group from the data-active stamp even when the widget's
+                // own panel is hidden.
+                onActiveSectionChange: handleActiveSectionChange,
                 snapToGrid: false,
                 snapToResize: false,
                 labelLayout:
