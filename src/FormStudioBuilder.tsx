@@ -1972,6 +1972,26 @@ function getComponentTokenValue(
   }
   return stringifyTokenValue(data[component.key]);
 }
+// A custom narrative template whose value tokens ALL resolve empty renders as a
+// dangling sentence fragment ("has a birthday on"). Hide the whole snippet in
+// that case. Label tokens (*_label) don't count as values, and templates with
+// no tokens at all (static content) are always kept. Default label/value
+// templates are NOT run through this — legacy preview shows empty labels, and
+// per-component hiding stays opt-in via hideOutputIfEmpty.
+function isNarrativeWithAllValueTokensEmpty(
+  template: string,
+  tokenValues: Record<string, string>
+): boolean {
+  const valueTokens = extractTemplateTokens(template).filter(
+    (key) => !key.endsWith("_label")
+  );
+  if (valueTokens.length === 0) {
+    return false;
+  }
+  return valueTokens.every(
+    (key) => !clean(resolveTokenValue(key, tokenValues))
+  );
+}
 function hasExplicitDocumentOutputTemplate(component: FormComponent): boolean {
   return component.documentOutputTemplate != null;
 }
@@ -2303,6 +2323,16 @@ function resolveDocumentOutputHtml(
         return "";
       }
       if (component.hideOutputIfEmpty && !hasOutputValue(component, data)) {
+        return "";
+      }
+      if (
+        (perAnswerTemplate != null ||
+          hasExplicitDocumentOutputTemplate(component) ||
+          component.type === "contentBlock") &&
+        component.type !== "systemDatagrid2" &&
+        component.type !== "datagrid" &&
+        isNarrativeWithAllValueTokensEmpty(template, tokenValues)
+      ) {
         return "";
       }
       if (component.type === "systemDatagrid2") {
@@ -2862,6 +2892,14 @@ function buildPrintDocumentHtml(
             return undefined;
           }
           if (component.hideOutputIfEmpty && !hasOutputValue(component, data)) {
+            return undefined;
+          }
+          if (
+            (perAnswerTemplate != null ||
+              hasExplicitDocumentOutputTemplate(component) ||
+              component.type === "contentBlock") &&
+            isNarrativeWithAllValueTokensEmpty(template, tokenValues)
+          ) {
             return undefined;
           }
           const blockHtml = renderPrintBlock(
