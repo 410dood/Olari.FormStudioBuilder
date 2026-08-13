@@ -275,6 +275,13 @@ interface FormComponent {
   systemTemplateSlotProperty?: SystemTemplateSlotProperty;
   sumSources?: string[];
   section?: string;
+  /**
+   * Stable section identity. Shared by every component in the same section;
+   * survives section renames (the title is display text only once this is
+   * set). Assigned on designer save; absent on legacy definitions, which
+   * keep title-derived section keys.
+   */
+  sectionId?: string;
   sectionOrder?: number;
   sectionColumns?: number;
   sectionColumn?: number;
@@ -1118,6 +1125,15 @@ function normalizeStatus(value: unknown): string {
 function resolveSectionKey(section?: string): string {
   return normalizeSectionName(section) || "__default";
 }
+// Section key resolution: stable id when present (designer-saved
+// definitions), else the legacy title key. Grouping, visibility maps, DOM
+// stamps, and nav-rail keys all flow from this one resolver.
+function resolveComponentSectionKey(component: {
+  section?: string;
+  sectionId?: string;
+}): string {
+  return clean(component.sectionId) || resolveSectionKey(component.section);
+}
 function resolveLabelLayoutOverride(value: unknown): LabelLayout | undefined {
   const normalized = clean(value).toLowerCase();
   if (normalized === "inline") {
@@ -1141,6 +1157,31 @@ function parseSectionVisibilityMap(value: unknown): Record<string, boolean> {
     map[normalizedKey] = toBoolean(raw);
   });
   return map;
+}
+// Legacy AnswersJson visibility maps are keyed by section TITLE. Definitions
+// saved with sectionIds key sections by id instead. When an id-keyed lookup
+// would miss but the legacy title key holds a value, mirror the title value
+// onto the id key so previously saved answers keep hiding/showing the right
+// sections. Id-keyed entries always win (they are written by newer sessions).
+function applySectionVisibilityLegacyFallback(
+  map: Record<string, boolean>,
+  components: FormComponent[]
+): Record<string, boolean> {
+  let result = map;
+  components.forEach((component) => {
+    const idKey = clean(component.sectionId);
+    if (!idKey || result[idKey] !== undefined) {
+      return;
+    }
+    const titleKey = resolveSectionKey(component.section);
+    if (titleKey !== "__default" && map[titleKey] !== undefined) {
+      if (result === map) {
+        result = { ...map };
+      }
+      result[idKey] = map[titleKey];
+    }
+  });
+  return result;
 }
 function resolveBooleanSetting(
   value: boolean | DynamicValue<boolean> | undefined,
@@ -2337,8 +2378,9 @@ function resolveDocumentOutputHtml(
   systemSectionHtmlBySlot: Record<string, string> = {}
 ): string {
   const sectionSwitchableByKey = buildSectionSwitchableMap(definition);
-  const sectionVisibilityByKey = parseSectionVisibilityMap(
-    data[SECTION_VISIBILITY_DATA_KEY]
+  const sectionVisibilityByKey = applySectionVisibilityLegacyFallback(
+    parseSectionVisibilityMap(data[SECTION_VISIBILITY_DATA_KEY]),
+    definition.components
   );
   const tokenValues = buildTokenScope(definition, data, contextTokens);
   const componentsByKey = new Map(
@@ -2357,7 +2399,7 @@ function resolveDocumentOutputHtml(
       if (!template && component.type !== "systemDatagrid2") {
         return "";
       }
-      const sectionKey = resolveSectionKey(component.section);
+      const sectionKey = resolveComponentSectionKey(component);
       const sectionIsSwitchable = Boolean(sectionSwitchableByKey[sectionKey]);
       const sectionIsVisible =
         !sectionIsSwitchable || sectionVisibilityByKey[sectionKey] !== false;
@@ -2641,8 +2683,9 @@ function buildPrintDocumentHtml(
   systemSectionHtmlBySlot: Record<string, string>
 ): string {
   const sectionSwitchableByKey = buildSectionSwitchableMap(definition);
-  const sectionVisibilityByKey = parseSectionVisibilityMap(
-    data[SECTION_VISIBILITY_DATA_KEY]
+  const sectionVisibilityByKey = applySectionVisibilityLegacyFallback(
+    parseSectionVisibilityMap(data[SECTION_VISIBILITY_DATA_KEY]),
+    definition.components
   );
   const tokenValues = buildTokenScope(definition, data, contextTokens);
   const printComponentsByKey = new Map(
@@ -2664,7 +2707,7 @@ function buildPrintDocumentHtml(
       component,
       index
     ) => {
-      const sectionKey = resolveSectionKey(component.section);
+      const sectionKey = resolveComponentSectionKey(component);
       const sectionTitle = normalizeSectionName(component.section);
       const rawSectionColumns = Number(component.sectionColumns);
       const inferredSectionColumns = inferSectionColumnsFromTitle(sectionTitle);
@@ -3452,6 +3495,7 @@ function resolveSectionMeta(
 ): Pick<
   FormComponent,
   | "section"
+  | "sectionId"
   | "sectionOrder"
   | "sectionColumns"
   | "sectionCollapsible"
@@ -3479,6 +3523,8 @@ function resolveSectionMeta(
     const sectionWideColumns = maxSectionColumns(targetSection);
     return {
       section: targetSection,
+      // Moving into a section means adopting its stable identity.
+      sectionId: targetSection ? clean(target.sectionId) || undefined : undefined,
       sectionOrder: target.sectionOrder,
       sectionColumns:
         sectionWideColumns > 1 ? sectionWideColumns : target.sectionColumns,
@@ -3490,6 +3536,7 @@ function resolveSectionMeta(
   if (!normalizedSection) {
     return {
       section: undefined,
+      sectionId: undefined,
       sectionOrder: undefined,
       sectionColumns: undefined,
       sectionCollapsible: false,
@@ -3502,6 +3549,7 @@ function resolveSectionMeta(
   const sectionWideColumns = maxSectionColumns(normalizedSection);
   return {
     section: normalizedSection,
+    sectionId: clean(existing?.sectionId) || undefined,
     sectionOrder: existing?.sectionOrder ?? nextSectionOrder(components),
     sectionColumns:
       sectionWideColumns > 1
@@ -3513,7 +3561,7 @@ function resolveSectionMeta(
   };
 }
 function getSectionKey(component: FormComponent): string {
-  return component.section || "";
+  return clean(component.sectionId) || component.section || "";
 }
 let choiceOptionDraftId = 0;
 function createChoiceOptionDraft(
@@ -4307,7 +4355,7 @@ function buildSectionSwitchableMap(
     if (!component.sectionSwitchEnabled) {
       return;
     }
-    const key = resolveSectionKey(component.section);
+    const key = resolveComponentSectionKey(component);
     map[key] = true;
   });
   return map;
@@ -4747,6 +4795,10 @@ function normalizeComponent(item: any, index: number): FormComponent {
     systemTemplateType,
     sumSources: type === "total" ? sumSources : undefined,
     section: clean(item?.section) || undefined,
+    // Stable section identity only makes sense alongside a section.
+    sectionId: clean(item?.section)
+      ? clean(item?.sectionId) || undefined
+      : undefined,
     sectionOrder: Number.isFinite(Number(item?.sectionOrder))
       ? Math.floor(Number(item.sectionOrder))
       : undefined,
@@ -4842,6 +4894,57 @@ function buildFieldsManifest(definition: FormDefinition): FieldManifestEntry[] {
       }
       return entry;
     });
+}
+function makeSectionId(title?: string): string {
+  const slug = clean(title)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 24);
+  const suffix = Math.random().toString(36).slice(2, 8);
+  return slug ? `sec_${slug}_${suffix}` : `sec_${suffix}`;
+}
+// Designer-save-only: give every sectioned component a stable sectionId so
+// the group identity survives title renames. Components sharing a section
+// (same title key) share the same id; existing ids win (first in document
+// order — a field moved between sections already adopted the target id via
+// resolveSectionMeta); ids are only GENERATED for sections that have none
+// yet. Components without a section carry no id. Legacy definitions are
+// untouched until a designer save runs through here.
+function ensureSectionIds(definition: FormDefinition): FormDefinition {
+  const idBySectionTitle: Record<string, string> = {};
+  definition.components.forEach((component) => {
+    const titleKey = resolveSectionKey(component.section);
+    if (titleKey === "__default" || idBySectionTitle[titleKey]) {
+      return;
+    }
+    const existing = clean(component.sectionId);
+    if (existing) {
+      idBySectionTitle[titleKey] = existing;
+    }
+  });
+  let changed = false;
+  const nextComponents = definition.components.map((component) => {
+    const titleKey = resolveSectionKey(component.section);
+    if (titleKey === "__default") {
+      if (clean(component.sectionId)) {
+        changed = true;
+        return { ...component, sectionId: undefined };
+      }
+      return component;
+    }
+    let sectionId = idBySectionTitle[titleKey];
+    if (!sectionId) {
+      sectionId = makeSectionId(component.section);
+      idBySectionTitle[titleKey] = sectionId;
+    }
+    if (clean(component.sectionId) === sectionId) {
+      return component;
+    }
+    changed = true;
+    return { ...component, sectionId };
+  });
+  return changed ? { ...definition, components: nextComponents } : definition;
 }
 function serializeDefinitionWithManifest(definition: FormDefinition): string {
   return JSON.stringify(
@@ -5764,6 +5867,7 @@ function buildUiSchema(definition: FormDefinition): JsonObject {
     const fieldUi: JsonObject = {
       "ui:options": {
         section: component.section || "",
+        sectionId: component.sectionId || "",
         sectionOrder: component.sectionOrder ?? 999,
         sectionColumns: component.sectionColumns ?? undefined,
         sectionColumn: component.sectionColumn ?? undefined,
@@ -6989,6 +7093,7 @@ function ObjectTemplate(props: any): ReactElement {
         id?: string;
         orderIndex?: number;
         section?: string;
+        sectionId?: string;
         sectionOrder?: number;
         sectionColumns?: number;
         sectionColumn?: number;
@@ -7228,7 +7333,12 @@ function ObjectTemplate(props: any): ReactElement {
     );
     const meta = formContext.componentMetaByKey?.[key];
     const options = property?.uiSchema?.["ui:options"] || {};
-    const sectionKey = clean(meta?.section ?? options.section) || "__default";
+    // Group key: stable sectionId when the definition carries one, else the
+    // legacy title key. The TITLE stays the display text either way.
+    const sectionKey =
+      clean(meta?.sectionId ?? options.sectionId) ||
+      clean(meta?.section ?? options.section) ||
+      "__default";
     const sectionTitle = clean(meta?.section ?? options.section);
     const rawSectionColumns = (() => {
       const rawColumns = Number(meta?.sectionColumns ?? options.sectionColumns);
@@ -7910,6 +8020,7 @@ function ObjectTemplate(props: any): ReactElement {
               sectionRefs.current[section.key] = node;
             }}
             data-section-key={section.key}
+            data-section-title={section.title || undefined}
             data-req-total={sectionStats ? String(sectionStats.reqTotal) : undefined}
             data-req-done={sectionStats ? String(sectionStats.reqDone) : undefined}
             data-prefilled={sectionStats ? String(sectionStats.prefilled) : undefined}
@@ -9512,10 +9623,17 @@ export default function FormStudioBuilder(
   }, [builderTab, definition, formData]);
   const persist = useCallback(
     (
-      nextDefinition: FormDefinition,
+      rawNextDefinition: FormDefinition,
       nextData: JsonObject,
       triggerChange: boolean
     ) => {
+      // Stable section ids are assigned by the DESIGNER save path only —
+      // viewer saves persist answers and must not rewrite legacy
+      // definitions onto id-based section keys mid-session.
+      const nextDefinition =
+        props.viewMode === "viewer"
+          ? rawNextDefinition
+          : ensureSectionIds(rawNextDefinition);
       const sanitizedData = sanitizeFormData(nextData, nextDefinition);
       setDefinition(nextDefinition);
       setFormData(sanitizedData);
@@ -9570,7 +9688,8 @@ export default function FormStudioBuilder(
       source?.formDataAttr,
       source?.onChangeAction,
       tokenContext,
-      systemSectionHtmlBySlot
+      systemSectionHtmlBySlot,
+      props.viewMode
     ]
   );
   const persistDataOnly = useCallback(
@@ -10426,12 +10545,16 @@ export default function FormStudioBuilder(
     [definition]
   );
   const sectionVisibilityByKey = useMemo(
-    () => parseSectionVisibilityMap(formData[SECTION_VISIBILITY_DATA_KEY]),
-    [formData]
+    () =>
+      applySectionVisibilityLegacyFallback(
+        parseSectionVisibilityMap(formData[SECTION_VISIBILITY_DATA_KEY]),
+        definition.components
+      ),
+    [formData, definition.components]
   );
   const isSectionSwitchHidden = useCallback(
-    (section: string | undefined) => {
-      const key = resolveSectionKey(section);
+    (component: Pick<FormComponent, "section" | "sectionId">) => {
+      const key = resolveComponentSectionKey(component);
       return (
         Boolean(sectionSwitchableByKey[key]) &&
         sectionVisibilityByKey[key] === false
@@ -10446,7 +10569,7 @@ export default function FormStudioBuilder(
     > = {};
     definition.components.forEach((component) => {
       const normalizedSection = normalizeSectionName(component.section);
-      const sectionKey = normalizedSection || "__default";
+      const sectionKey = resolveComponentSectionKey(component);
       const sectionName = normalizedSection || "Unsectioned";
       if (!summary[sectionKey]) {
         summary[sectionKey] = { key: sectionKey, name: sectionName, count: 0 };
@@ -10475,7 +10598,7 @@ export default function FormStudioBuilder(
     // agrees with what the user sees before the first autosave lands.
     definition.components.forEach((component, index) => {
       const normalizedSection = normalizeSectionName(component.section);
-      const sectionKey = normalizedSection || "__default";
+      const sectionKey = resolveComponentSectionKey(component);
       const sectionName = normalizedSection || "Unsectioned";
       if (!summary[sectionKey]) {
         summary[sectionKey] = {
@@ -10622,7 +10745,7 @@ export default function FormStudioBuilder(
           isTrackableSectionSummaryComponent(component) &&
           // Switch-hidden sections are excluded from output; jumping the
           // user into their unrendered stub is a dead end.
-          !isSectionSwitchHidden(component.section) &&
+          !isSectionSwitchHidden(component) &&
           isComponentVisibleForSummary(
             component,
             viewerFormData,
@@ -10637,7 +10760,7 @@ export default function FormStudioBuilder(
     if (!target) {
       return;
     }
-    const sectionKey = normalizeSectionName(target.section) || "__default";
+    const sectionKey = resolveComponentSectionKey(target);
     scrollPreviewToSection(sectionKey);
     window.setTimeout(() => {
       const element =
@@ -10854,6 +10977,7 @@ export default function FormStudioBuilder(
           id: component.id,
           orderIndex: index,
           section: component.section,
+          sectionId: clean(component.sectionId) || undefined,
           sectionOrder: component.sectionOrder,
           sectionColumns: component.sectionColumns,
           sectionColumn: component.sectionColumn,
@@ -10864,7 +10988,7 @@ export default function FormStudioBuilder(
           sharedFieldRef: clean(component.sharedFieldRef) || undefined
         };
         return map;
-      }, {} as Record<string, { id?: string; orderIndex?: number; section?: string; sectionOrder?: number; sectionColumns?: number; sectionColumn?: number; sectionCollapsible?: boolean; sectionCollapsedByDefault?: boolean; columnSpan?: number; hasVisibilityRules?: boolean; sharedFieldRef?: string }>),
+      }, {} as Record<string, { id?: string; orderIndex?: number; section?: string; sectionId?: string; sectionOrder?: number; sectionColumns?: number; sectionColumn?: number; sectionCollapsible?: boolean; sectionCollapsedByDefault?: boolean; columnSpan?: number; hasVisibilityRules?: boolean; sharedFieldRef?: string }>),
     [definition.components]
   );
   const componentIdByKey = useMemo(
@@ -11473,6 +11597,7 @@ export default function FormStudioBuilder(
                 return {
                   ...moved,
                   section: sectionMeta.section,
+                  sectionId: sectionMeta.sectionId,
                   sectionOrder: sectionMeta.sectionOrder,
                   sectionColumns: sectionMeta.sectionColumns,
                   sectionColumn,
@@ -11667,7 +11792,10 @@ export default function FormStudioBuilder(
       updateDefinition((current) => {
         let changed = false;
         const nextComponents = current.components.map((component) => {
-          if (resolveSectionKey(component.section) !== normalizedSectionKey) {
+          // Match by resolved key (sectionId when present) so a RENAME finds
+          // the section by its stable id — the ...component spread below
+          // preserves sectionId, which is the whole point of Task 2.
+          if (resolveComponentSectionKey(component) !== normalizedSectionKey) {
             return component;
           }
           const nextSection = hasSectionTitleUpdate
@@ -11762,6 +11890,7 @@ export default function FormStudioBuilder(
           type,
           required: false,
           section: sectionMeta.section,
+          sectionId: sectionMeta.sectionId,
           sectionOrder: sectionMeta.sectionOrder,
           sectionColumns: sectionMeta.sectionColumns,
           sectionColumn,
@@ -11849,6 +11978,7 @@ export default function FormStudioBuilder(
         const nextComponent: FormComponent = {
           ...moving,
           section: sectionMeta.section,
+          sectionId: sectionMeta.sectionId,
           sectionOrder: sectionMeta.sectionOrder,
           sectionColumns: sectionMeta.sectionColumns,
           sectionColumn,
