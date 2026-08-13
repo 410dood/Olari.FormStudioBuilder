@@ -6974,6 +6974,7 @@ function ObjectTemplate(props: any): ReactElement {
   const formContext = (props?.registry?.formContext ||
     props?.formContext ||
     {}) as {
+    instanceIdPrefix?: string;
     labelLayout?: LabelLayout;
     sectionSwitchableByKey?: Record<string, boolean>;
     sectionVisibilityByKey?: Record<string, boolean>;
@@ -7080,12 +7081,15 @@ function ObjectTemplate(props: any): ReactElement {
     if (Array.isArray(fieldPath) && fieldPath.length === 0) {
       return true;
     }
+    // With a per-instance idPrefix, the root node's $id is the prefix itself
+    // (e.g. "fsbabc123_root"), not the RJSF default "root".
+    const rootId = clean(formContext.instanceIdPrefix).toLowerCase() || "root";
     const fieldPathId = clean(props?.fieldPathId?.$id).toLowerCase();
-    if (fieldPathId === "root") {
+    if (fieldPathId === rootId || fieldPathId === "root") {
       return true;
     }
     const legacyIdSchemaId = clean(props?.idSchema?.$id).toLowerCase();
-    return legacyIdSchemaId === "root";
+    return legacyIdSchemaId === rootId || legacyIdSchemaId === "root";
   })();
   const reorderEnabled =
     Boolean(formContext.previewReorderEnabled) && isRootObjectTemplate;
@@ -9122,6 +9126,14 @@ export default function FormStudioBuilder(
     return <SignatureImageView attr={props.signatureImageAttr} />;
   }
   const source = props.dataSource?.[0];
+  // Per-widget-instance RJSF id prefix. The widget can be instantiated once
+  // per ListView row; RJSF's default "root" prefix would then emit duplicate
+  // DOM ids (#root_<fieldKey>) across instances, so id-based lookups
+  // (jumpToNextRequired) could scroll/focus the wrong instance's field.
+  const instanceIdPrefix = useMemo(
+    () => `fsb${Math.random().toString(36).slice(2, 8)}_root`,
+    []
+  );
   const [definition, setDefinition] = useState<FormDefinition>(DEFAULT_FORM);
   const [formData, setFormData] = useState<JsonObject>({});
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -10629,8 +10641,10 @@ export default function FormStudioBuilder(
     scrollPreviewToSection(sectionKey);
     window.setTimeout(() => {
       const element =
-        document.getElementById(`root_${target.key}`) ||
-        document.querySelector<HTMLElement>(`[id^="root_${target.key}"]`);
+        document.getElementById(`${instanceIdPrefix}_${target.key}`) ||
+        document.querySelector<HTMLElement>(
+          `[id^="${instanceIdPrefix}_${target.key}"]`
+        );
       if (element) {
         element.scrollIntoView({ behavior: "smooth", block: "center" });
         if (typeof element.focus === "function") {
@@ -10638,7 +10652,7 @@ export default function FormStudioBuilder(
         }
       }
     }, 350);
-  }, [firstMissingRequired, scrollPreviewToSection]);
+  }, [firstMissingRequired, scrollPreviewToSection, instanceIdPrefix]);
   const toolboxFilter = clean(paletteFilter).toLowerCase();
   const filteredLayoutTemplates = useMemo(
     () =>
@@ -12511,10 +12525,12 @@ export default function FormStudioBuilder(
               uiSchema={uiSchema as any}
               formData={viewerFormData}
               validator={validator}
+              idPrefix={instanceIdPrefix}
               experimental_defaultFormStateBehavior={{
                 constAsDefaults: "skipOneOf"
               }}
               formContext={{
+                instanceIdPrefix,
                 componentMetaByKey,
                 previewReorderEnabled: false,
                 previewResizeEnabled: false,
@@ -12687,10 +12703,12 @@ export default function FormStudioBuilder(
             uiSchema={uiSchema as any}
             formData={formData}
             validator={validator}
+            idPrefix={instanceIdPrefix}
             experimental_defaultFormStateBehavior={{
               constAsDefaults: "skipOneOf"
             }}
             formContext={{
+              instanceIdPrefix,
               componentMetaByKey,
               previewReorderEnabled: false,
               previewResizeEnabled: false,
@@ -13062,10 +13080,12 @@ export default function FormStudioBuilder(
                   uiSchema={uiSchema as any}
                   formData={formData}
                   validator={validator}
+                  idPrefix={instanceIdPrefix}
                   experimental_defaultFormStateBehavior={{
                     constAsDefaults: "skipOneOf"
                   }}
                   formContext={{
+                    instanceIdPrefix,
                     componentMetaByKey,
                     previewReorderEnabled: true,
                     previewResizeEnabled: true,
