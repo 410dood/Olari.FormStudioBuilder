@@ -277,6 +277,9 @@ interface FormComponent {
   systemTemplateType?: SystemTemplateType;
   systemTemplateSlotProperty?: SystemTemplateSlotProperty;
   sumSources?: string[];
+  /** Total-only: interpretation bands, e.g. 10-14 -> "Moderate depression".
+   *  The matched label is exposed as the {key_band} token. */
+  scoreBands?: Array<{ min: number; max: number; label: string }>;
   section?: string;
   /**
    * Stable section identity. Shared by every component in the same section;
@@ -360,12 +363,16 @@ interface BuilderOptions {
   snapToResize: boolean;
   labelLayout: LabelLayout;
   showLayoutSection: boolean;
+  /** "wizard" fills one section per page with gated Next; "scroll" is the
+   *  classic continuous form. */
+  fillMode: "scroll" | "wizard";
 }
 const DEFAULT_BUILDER_OPTIONS: BuilderOptions = {
   snapToGrid: true,
   snapToResize: true,
   labelLayout: "block",
-  showLayoutSection: true
+  showLayoutSection: true,
+  fillMode: "scroll"
 };
 const DEFAULT_FORM: FormDefinition = {
   version: 1,
@@ -2227,6 +2234,14 @@ function buildFormTokenValues(
       `${component.key}_label`,
       stripTrailingColon(component.label || component.key)
     );
+    if (component.type === "total" && component.scoreBands?.length) {
+      const numericTotal = toNumericValue(data[component.key]) ?? 0;
+      addToken(
+        tokens,
+        `${component.key}_band`,
+        resolveScoreBandLabel(component.scoreBands, numericTotal)
+      );
+    }
     if (component.type === "matrix") {
       const rows = getMatrixRows(component);
       const answers = sanitizeMatrixValue(component, data[component.key]) || {};
@@ -4401,6 +4416,38 @@ function resolveCalculatedSourceKeys(
   }
   return available.map((candidate) => candidate.key);
 }
+function normalizeScoreBands(
+  raw: any
+): Array<{ min: number; max: number; label: string }> | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const bands = raw
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return null;
+      }
+      const min = Number((entry as JsonObject).min);
+      const max = Number((entry as JsonObject).max);
+      const label = clean((entry as JsonObject).label);
+      if (!Number.isFinite(min) || !Number.isFinite(max) || !label) {
+        return null;
+      }
+      return { min: Math.min(min, max), max: Math.max(min, max), label };
+    })
+    .filter(Boolean) as Array<{ min: number; max: number; label: string }>;
+  return bands.length ? bands.sort((a, b) => a.min - b.min) : undefined;
+}
+function resolveScoreBandLabel(
+  bands: Array<{ min: number; max: number; label: string }> | undefined,
+  total: number
+): string {
+  if (!bands?.length || !Number.isFinite(total)) {
+    return "";
+  }
+  const match = bands.find((band) => total >= band.min && total <= band.max);
+  return match?.label || "";
+}
 function calculateComponentTotal(
   component: FormComponent,
   components: FormComponent[],
@@ -4457,7 +4504,8 @@ function normalizeBuilderOptions(value: any): BuilderOptions {
     snapToGrid: value?.snapToGrid !== false,
     snapToResize: value?.snapToResize !== false,
     labelLayout: normalizedLabelLayout,
-    showLayoutSection: value?.showLayoutSection !== false
+    showLayoutSection: value?.showLayoutSection !== false,
+    fillMode: clean(value?.fillMode).toLowerCase() === "wizard" ? "wizard" : "scroll"
   };
 }
 function snapColumnSpan(rawValue: number, snapEnabled: boolean): number {
@@ -4825,6 +4873,8 @@ function normalizeComponent(item: any, index: number): FormComponent {
     systemTemplateSlotProperty,
     systemTemplateType,
     sumSources: type === "total" ? sumSources : undefined,
+    scoreBands:
+      type === "total" ? normalizeScoreBands(item?.scoreBands) : undefined,
     section: clean(item?.section) || undefined,
     // Stable section identity only makes sense alongside a section.
     sectionId: clean(item?.section)
@@ -6064,10 +6114,14 @@ function buildUiSchema(definition: FormDefinition): JsonObject {
     if (component.type === "total") {
       fieldUi["ui:readonly"] = true;
       fieldUi["ui:disabled"] = true;
+      if (component.scoreBands?.length) {
+        fieldUi["ui:widget"] = "scoreTotal";
+      }
       fieldUi["ui:options"] = {
         ...(fieldUi["ui:options"] || {}),
         calculation: "sum",
-        sourceKeys: component.sumSources || undefined
+        sourceKeys: component.sumSources || undefined,
+        scoreBands: component.scoreBands || undefined
       };
     }
     uiSchema[component.key] = fieldUi;
@@ -6625,6 +6679,31 @@ function MatrixGridField(props: any): ReactElement {
   );
 }
 const FORM_FIELDS = { matrixGrid: MatrixGridField };
+function ScoreTotalWidget(props: any): ReactElement {
+  const bands = normalizeScoreBands(props.options?.scoreBands);
+  const numeric = toNumericValue(props.value) ?? 0;
+  const bandLabel = resolveScoreBandLabel(bands, numeric);
+  return (
+    <div className="rjsf-builder__score-total">
+      <input
+        id={props.id}
+        className="form-control"
+        type="text"
+        readOnly
+        disabled
+        value={String(props.value ?? 0)}
+      />
+      {bandLabel ? (
+        <span
+          className="rjsf-builder__score-band"
+          title={`Score ${numeric}: ${bandLabel}`}
+        >
+          {bandLabel}
+        </span>
+      ) : null}
+    </div>
+  );
+}
 function ContentBlockWidget(props: any): ReactElement {
   const options = (props?.options || {}) as { contentText?: unknown };
   const formContext =
@@ -7188,6 +7267,11 @@ function ObjectTemplate(props: any): ReactElement {
     >;
     activeSectionKey?: string;
     onActiveSectionChange?: (sectionKey: string) => void;
+    wizard?: {
+      enabled: boolean;
+      activeKey: string | null;
+      onNavigate: (sectionKey: string | null) => void;
+    };
   };
   const snapToGrid = formContext.snapToGrid !== false;
   const snapToResize = formContext.snapToResize !== false;
@@ -7975,6 +8059,25 @@ function ObjectTemplate(props: any): ReactElement {
       snapToResize
     ]
   );
+  const wizard =
+    isRootObjectTemplate && formContext.wizard?.enabled
+      ? formContext.wizard
+      : undefined;
+  const wizardActiveKey = wizard
+    ? orderedSections.some((section) => section.key === wizard.activeKey)
+      ? (wizard.activeKey as string)
+      : orderedSections[0]?.key
+    : undefined;
+  const wizardActiveIndex = wizard
+    ? orderedSections.findIndex((section) => section.key === wizardActiveKey)
+    : -1;
+  const wizardActiveStats =
+    wizard && wizardActiveKey
+      ? formContext.sectionStatsByKey?.[wizardActiveKey]
+      : undefined;
+  const wizardNextBlocked = Boolean(
+    wizardActiveStats && wizardActiveStats.reqDone < wizardActiveStats.reqTotal
+  );
   return (
     <div
       className={`rjsf-builder__object${
@@ -7982,7 +8085,8 @@ function ObjectTemplate(props: any): ReactElement {
       }`}
     >
       {" "}
-      {showSectionBulkToggle &&
+      {!wizard &&
+      showSectionBulkToggle &&
       isRootObjectTemplate &&
       collapsibleSectionKeys.length ? (
         <div className="rjsf-builder__section-bulk">
@@ -8071,6 +8175,10 @@ function ObjectTemplate(props: any): ReactElement {
             }${
               sectionIsSwitchable && !sectionIsVisibleBySwitch
                 ? " rjsf-builder__section--switch-off"
+                : ""
+            }${
+              wizard && section.key !== wizardActiveKey
+                ? " rjsf-builder__section--wizard-hidden"
                 : ""
             }`}
           >
@@ -8488,6 +8596,74 @@ function ObjectTemplate(props: any): ReactElement {
           </div>
         );
       })}{" "}
+      {wizard && orderedSections.length > 1 ? (
+        <div className="rjsf-builder__wizard-nav">
+          {" "}
+          <button
+            type="button"
+            className="rjsf-builder__button"
+            disabled={wizardActiveIndex <= 0}
+            onClick={() =>
+              wizard.onNavigate?.(
+                orderedSections[Math.max(0, wizardActiveIndex - 1)]?.key || null
+              )
+            }
+          >
+            {" "}
+            &larr; Back{" "}
+          </button>{" "}
+          <div className="rjsf-builder__wizard-progress">
+            {" "}
+            <span>
+              Section {wizardActiveIndex + 1} of {orderedSections.length}
+            </span>{" "}
+            <span className="rjsf-builder__wizard-progress-track">
+              <span
+                className="rjsf-builder__wizard-progress-fill"
+                style={{
+                  width: `${Math.round(
+                    ((wizardActiveIndex + 1) / orderedSections.length) * 100
+                  )}%`
+                }}
+              />
+            </span>{" "}
+            {wizardNextBlocked && wizardActiveStats ? (
+              <span className="rjsf-builder__wizard-remaining">
+                {wizardActiveStats.reqTotal - wizardActiveStats.reqDone}{" "}
+                required left
+              </span>
+            ) : null}{" "}
+          </div>{" "}
+          {wizardActiveIndex < orderedSections.length - 1 ? (
+            <button
+              type="button"
+              className="rjsf-builder__button rjsf-builder__button--primary"
+              disabled={wizardNextBlocked}
+              title={
+                wizardNextBlocked
+                  ? "Complete the required fields in this section to continue"
+                  : undefined
+              }
+              onClick={() =>
+                wizard.onNavigate?.(
+                  orderedSections[
+                    Math.min(orderedSections.length - 1, wizardActiveIndex + 1)
+                  ]?.key || null
+                )
+              }
+            >
+              {" "}
+              Next &rarr;{" "}
+            </button>
+          ) : (
+            <span className="rjsf-builder__wizard-done">
+              {wizardNextBlocked
+                ? "Required fields remain in this section"
+                : "End of form"}
+            </span>
+          )}{" "}
+        </div>
+      ) : null}{" "}
     </div>
   );
 }
@@ -10756,6 +10932,29 @@ export default function FormStudioBuilder(
     });
     return map;
   }, [viewerSectionSummaries]);
+  // Wizard fill mode: one section per page. The active section key lives
+  // here; the ObjectTemplate resolves ordering, renders the nav bar, and
+  // calls back through formContext.wizard.onNavigate.
+  // Applies to the viewer and the Preview tab; the designer canvas always
+  // shows every section (it doesn't receive this context).
+  const wizardEnabled = definition.builderOptions?.fillMode === "wizard";
+  const [wizardSectionKey, setWizardSectionKey] = useState<string | null>(null);
+  useEffect(() => {
+    if (!wizardEnabled) {
+      setWizardSectionKey(null);
+    }
+  }, [wizardEnabled]);
+  const wizardContext = useMemo(
+    () =>
+      wizardEnabled
+        ? {
+            enabled: true,
+            activeKey: wizardSectionKey,
+            onNavigate: setWizardSectionKey
+          }
+        : undefined,
+    [wizardEnabled, wizardSectionKey]
+  );
   const overallCompletionPercent = useMemo(() => {
     let trackable = 0;
     let completed = 0;
@@ -11517,6 +11716,195 @@ export default function FormStudioBuilder(
     },
     [updateDefinition]
   );
+  const duplicateSelectedComponent = useCallback(() => {
+    const selected = selectedIdRef.current;
+    if (!selected) {
+      return;
+    }
+    updateDefinition((current) => {
+      const index = current.components.findIndex(
+        (component) => component.id === selected
+      );
+      if (index < 0) {
+        return current;
+      }
+      const clone = current.components[index];
+      const duplicate: FormComponent = {
+        ...(JSON.parse(JSON.stringify(clone)) as FormComponent),
+        id: makeId("cmp"),
+        key: makeUniqueKey(clone.key, current.components),
+        label: `${clone.label} Copy`
+      };
+      setSelectedId(duplicate.id);
+      const next = [...current.components];
+      next.splice(index + 1, 0, duplicate);
+      return { ...current, components: next };
+    });
+  }, [updateDefinition]);
+  const deleteSelectedComponent = useCallback(() => {
+    const selected = selectedIdRef.current;
+    if (!selected) {
+      return;
+    }
+    updateDefinition((current) => {
+      const next = current.components.filter(
+        (component) => component.id !== selected
+      );
+      if (next.length === current.components.length) {
+        return current;
+      }
+      setSelectedId(next[0]?.id || null);
+      return { ...current, components: next };
+    });
+  }, [updateDefinition]);
+  const moveSelectedComponent = useCallback(
+    (direction: -1 | 1) => {
+      const selected = selectedIdRef.current;
+      if (!selected) {
+        return;
+      }
+      updateDefinition((current) => {
+        const from = current.components.findIndex(
+          (component) => component.id === selected
+        );
+        const to = from + direction;
+        if (from < 0 || to < 0 || to >= current.components.length) {
+          return current;
+        }
+        const next = [...current.components];
+        const [moved] = next.splice(from, 1);
+        next.splice(to, 0, moved);
+        return { ...current, components: next };
+      });
+    },
+    [updateDefinition]
+  );
+  // Clipboard copy/paste of fields. navigator.clipboard carries the field
+  // across forms/tabs; the ref is a same-session fallback when clipboard
+  // access is denied.
+  const copiedComponentRef = useRef<FormComponent | null>(null);
+  const copySelectedComponent = useCallback(() => {
+    const selected = selectedIdRef.current;
+    const component = definitionRef.current.components.find(
+      (item) => item.id === selected
+    );
+    if (!component) {
+      return;
+    }
+    copiedComponentRef.current = component;
+    const payload = JSON.stringify({
+      fsFieldClipboard: 1,
+      component
+    });
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(payload).catch(() => undefined);
+    }
+    setMessage(`Copied "${component.label}" — paste with Ctrl+V.`);
+  }, []);
+  const pasteComponent = useCallback(async () => {
+    let raw: any = null;
+    if (navigator.clipboard?.readText) {
+      try {
+        // The permission prompt can suspend readText indefinitely — race it
+        // so the in-session fallback still works.
+        const text = (await Promise.race([
+          navigator.clipboard.readText(),
+          new Promise<never>((_resolve, reject) =>
+            setTimeout(() => reject(new Error("clipboard timeout")), 800)
+          )
+        ])) as string;
+        const parsed = JSON.parse(text);
+        if (parsed && parsed.fsFieldClipboard === 1 && parsed.component) {
+          raw = parsed.component;
+        }
+      } catch (_error) {
+        // fall through to the in-session fallback
+      }
+    }
+    if (!raw && copiedComponentRef.current) {
+      raw = copiedComponentRef.current;
+    }
+    if (!raw) {
+      setMessage("Nothing to paste — copy a field first.");
+      return;
+    }
+    updateDefinition((current) => {
+      const normalized = normalizeComponent(raw, current.components.length);
+      const pasted: FormComponent = {
+        ...normalized,
+        id: makeId("cmp"),
+        key: makeUniqueKey(normalized.key, current.components)
+      };
+      const selectedIndex = current.components.findIndex(
+        (component) => component.id === selectedIdRef.current
+      );
+      const insertAt =
+        selectedIndex >= 0 ? selectedIndex + 1 : current.components.length;
+      setSelectedId(pasted.id);
+      setMessage(`Pasted "${pasted.label}".`);
+      const next = [...current.components];
+      next.splice(insertAt, 0, pasted);
+      return { ...current, components: next };
+    });
+  }, [updateDefinition]);
+  // Designer keyboard shortcuts: Ctrl+D duplicate, Ctrl+C/V copy/paste,
+  // Delete remove, Ctrl+Arrow move. Skipped while typing in any form control
+  // so normal editing (and normal copy/paste of text) is untouched.
+  useEffect(() => {
+    if (props.viewMode !== "designer") {
+      return;
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      const mod = event.ctrlKey || event.metaKey;
+      const key = event.key.toLowerCase();
+      if (mod && key === "d") {
+        event.preventDefault();
+        duplicateSelectedComponent();
+        return;
+      }
+      if (mod && key === "c") {
+        if (window.getSelection()?.toString()) {
+          return; // let a real text selection copy normally
+        }
+        event.preventDefault();
+        copySelectedComponent();
+        return;
+      }
+      if (mod && key === "v") {
+        event.preventDefault();
+        void pasteComponent();
+        return;
+      }
+      if (mod && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+        event.preventDefault();
+        moveSelectedComponent(event.key === "ArrowUp" ? -1 : 1);
+        return;
+      }
+      if (event.key === "Delete") {
+        event.preventDefault();
+        deleteSelectedComponent();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [
+    props.viewMode,
+    duplicateSelectedComponent,
+    copySelectedComponent,
+    pasteComponent,
+    moveSelectedComponent,
+    deleteSelectedComponent
+  ]);
   const reorderComponents = useCallback(
     (dragId: string, dropId: string) => {
       updateDefinition((current) => {
@@ -12503,6 +12891,31 @@ export default function FormStudioBuilder(
                     ))}{" "}
                   </select>{" "}
                 </label>{" "}
+                <label className="rjsf-builder__toolbar-field rjsf-builder__toolbar-field--compact">
+                  {" "}
+                  <span>Fill mode</span>{" "}
+                  <select
+                    className="rjsf-builder__select rjsf-builder__select--compact"
+                    value={
+                      definition.builderOptions?.fillMode === "wizard"
+                        ? "wizard"
+                        : "scroll"
+                    }
+                    onChange={(event) =>
+                      updateBuilderOptions((options) => ({
+                        ...options,
+                        fillMode:
+                          event.target.value === "wizard" ? "wizard" : "scroll"
+                      }))
+                    }
+                  >
+                    {" "}
+                    <option value="scroll">Continuous (scroll)</option>{" "}
+                    <option value="wizard">
+                      Wizard (one section per page)
+                    </option>{" "}
+                  </select>{" "}
+                </label>{" "}
               </div>
             ) : null}{" "}
             {!isViewer ? (
@@ -12811,6 +13224,7 @@ export default function FormStudioBuilder(
                   ? previewScrollRequest
                   : 0,
                 sectionStatsByKey,
+                wizard: wizardContext,
                 activeSectionKey: activeViewerSectionKey || undefined,
                 // Always on in viewer: the page-level rail reads the active
                 // group from the data-active stamp even when the widget's
@@ -12827,7 +13241,8 @@ export default function FormStudioBuilder(
                 date: DateInputWidget,
                 signatureCanvas: SignatureWidget,
                 contentBlock: ContentBlockWidget,
-                systemDatagrid2Placeholder: SystemDatagrid2PlaceholderWidget
+                systemDatagrid2Placeholder: SystemDatagrid2PlaceholderWidget,
+                scoreTotal: ScoreTotalWidget
               }}
               fields={FORM_FIELDS}
               templates={FORM_TEMPLATES}
@@ -12982,6 +13397,8 @@ export default function FormStudioBuilder(
               systemSectionHtmlBySlot,
               contentBlockTokens: contentBlockTokenValues,
               selectedPreviewKey: undefined,
+              sectionStatsByKey,
+              wizard: wizardContext,
               snapToGrid: false,
               snapToResize: false,
               labelLayout:
@@ -12993,7 +13410,8 @@ export default function FormStudioBuilder(
               date: DateInputWidget,
               signatureCanvas: SignatureWidget,
               contentBlock: ContentBlockWidget,
-              systemDatagrid2Placeholder: SystemDatagrid2PlaceholderWidget
+              systemDatagrid2Placeholder: SystemDatagrid2PlaceholderWidget,
+                scoreTotal: ScoreTotalWidget
             }}
             fields={FORM_FIELDS}
             templates={FORM_TEMPLATES}
@@ -13413,7 +13831,8 @@ export default function FormStudioBuilder(
                     date: DateInputWidget,
                     signatureCanvas: SignatureWidget,
                     contentBlock: ContentBlockWidget,
-                    systemDatagrid2Placeholder: SystemDatagrid2PlaceholderWidget
+                    systemDatagrid2Placeholder: SystemDatagrid2PlaceholderWidget,
+                scoreTotal: ScoreTotalWidget
                   }}
                   fields={FORM_FIELDS}
                   templates={FORM_TEMPLATES}
@@ -15725,6 +16144,57 @@ export default function FormStudioBuilder(
                                 .join(", ")
                             : "none"}{" "}
                         </div>{" "}
+                        <label className="rjsf-builder__field">
+                          {" "}
+                          <span>Score bands (one per line, min-max: label)</span>{" "}
+                          <textarea
+                            key={`scorebands-${selectedComponent.id}`}
+                            className="rjsf-builder__input rjsf-builder__input--multiline"
+                            rows={4}
+                            placeholder={"0-4: Minimal\n5-9: Mild\n10-14: Moderate\n15-27: Severe"}
+                            defaultValue={(selectedComponent.scoreBands || [])
+                              .map(
+                                (band) => `${band.min}-${band.max}: ${band.label}`
+                              )
+                              .join("\n")}
+                            onBlur={(event) =>
+                              updateDefinition((current) => ({
+                                ...current,
+                                components: current.components.map(
+                                  (component) =>
+                                    component.id === selectedComponent.id
+                                      ? {
+                                          ...component,
+                                          scoreBands: normalizeScoreBands(
+                                            event.target.value
+                                              .split(/\r?\n/)
+                                              .map((line) => {
+                                                const match = line.match(
+                                                  /^\s*(-?\d+(?:\.\d+)?)\s*[-–]\s*(-?\d+(?:\.\d+)?)\s*[:=]\s*(.+)\s*$/
+                                                );
+                                                return match
+                                                  ? {
+                                                      min: Number(match[1]),
+                                                      max: Number(match[2]),
+                                                      label: match[3]
+                                                    }
+                                                  : null;
+                                              })
+                                              .filter(Boolean)
+                                          )
+                                        }
+                                      : component
+                                )
+                              }))
+                            }
+                          />{" "}
+                        </label>{" "}
+                        <div className="rjsf-builder__help">
+                          {" "}
+                          The matched band shows next to the live total and is
+                          available in output templates as{" "}
+                          <code>{`{${selectedComponent.key}_band}`}</code>.{" "}
+                        </div>{" "}
                       </div>
                     ) : null}{" "}
                     {isValidationTab ? (
@@ -16459,49 +16929,35 @@ export default function FormStudioBuilder(
                       <button
                         type="button"
                         className="rjsf-builder__button"
-                        onClick={() =>
-                          updateDefinition((current) => {
-                            const clone = current.components.find(
-                              (component) =>
-                                component.id === selectedComponent.id
-                            );
-                            if (!clone) {
-                              return current;
-                            }
-                            const key = makeUniqueKey(
-                              clone.key,
-                              current.components
-                            );
-                            const duplicate = {
-                              ...clone,
-                              id: makeId("cmp"),
-                              key,
-                              label: `${clone.label} Copy`
-                            };
-                            setSelectedId(duplicate.id);
-                            return {
-                              ...current,
-                              components: [...current.components, duplicate]
-                            };
-                          })
-                        }
+                        title="Ctrl+D"
+                        onClick={duplicateSelectedComponent}
                       >
                         {" "}
                         Duplicate{" "}
                       </button>{" "}
                       <button
                         type="button"
+                        className="rjsf-builder__button"
+                        title="Copy field to clipboard (Ctrl+C) — paste into this or another form"
+                        onClick={copySelectedComponent}
+                      >
+                        {" "}
+                        Copy{" "}
+                      </button>{" "}
+                      <button
+                        type="button"
+                        className="rjsf-builder__button"
+                        title="Paste a copied field after the selection (Ctrl+V)"
+                        onClick={() => void pasteComponent()}
+                      >
+                        {" "}
+                        Paste{" "}
+                      </button>{" "}
+                      <button
+                        type="button"
                         className="rjsf-builder__button rjsf-builder__button--danger"
-                        onClick={() =>
-                          updateDefinition((current) => {
-                            const next = current.components.filter(
-                              (component) =>
-                                component.id !== selectedComponent.id
-                            );
-                            setSelectedId(next[0]?.id || null);
-                            return { ...current, components: next };
-                          })
-                        }
+                        title="Delete key"
+                        onClick={deleteSelectedComponent}
                       >
                         {" "}
                         Delete{" "}

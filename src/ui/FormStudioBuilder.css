@@ -3525,3 +3525,82 @@
     font-size: 13px;
   }
 }
+
+/* Calculated-total score bands */
+.rjsf-builder__score-total {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.rjsf-builder__score-total input {
+  max-width: 120px;
+}
+
+.rjsf-builder__score-band {
+  padding: 4px 12px;
+  border-radius: 99px;
+  background: var(--accent-soft, #eaf1ff);
+  background: color-mix(in srgb, var(--rb-accent) 10%, var(--rb-surface));
+  border: 1px solid color-mix(in srgb, var(--rb-accent) 40%, var(--rb-border));
+  color: var(--rb-accent);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Wizard fill mode: one section per page. Hidden sections stay mounted so
+   answers, totals, and rule evaluation keep working. */
+.rjsf-builder__section--wizard-hidden {
+  display: none !important;
+}
+
+.rjsf-builder__wizard-nav {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--rb-border);
+  border-radius: 10px;
+  background: var(--rb-surface);
+}
+
+.rjsf-builder__wizard-progress {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--rb-muted);
+  white-space: nowrap;
+}
+
+.rjsf-builder__wizard-progress-track {
+  flex: 1 1 auto;
+  height: 6px;
+  min-width: 40px;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--rb-accent) 12%, var(--rb-surface));
+  overflow: hidden;
+}
+
+.rjsf-builder__wizard-progress-fill {
+  display: block;
+  height: 100%;
+  border-radius: 99px;
+  background: var(--rb-accent);
+  transition: width 200ms ease;
+}
+
+.rjsf-builder__wizard-remaining {
+  color: #b3261e;
+  font-weight: 600;
+}
+
+.rjsf-builder__wizard-done {
+  font-size: 12.5px;
+  color: var(--rb-muted);
+}
