@@ -7384,6 +7384,9 @@ function ObjectTemplate(props: any): ReactElement {
     ? Number(formContext.previewScrollRequest)
     : 0;
   const [dragOverKey, setDragOverKey] = useState<string | null>(null);
+  // Inline insert seam: which field's "+" palette is open, and its filter.
+  const [insertAfterKey, setInsertAfterKey] = useState<string | null>(null);
+  const [insertSearch, setInsertSearch] = useState("");
   const [dragOverSlot, setDragOverSlot] = useState<string | null>(null);
   const [resizingKey, setResizingKey] = useState<string | null>(null);
   const [sectionResizingKey, setSectionResizingKey] = useState<string | null>(
@@ -8083,6 +8086,76 @@ function ObjectTemplate(props: any): ReactElement {
             />
           ) : null}{" "}
           {item.content}{" "}
+          {reorderEnabled && onPreviewDropField ? (
+            <div
+              className={`rjsf-builder__insert${
+                insertAfterKey === itemKey ? " is-open" : ""
+              }`}
+              onClick={(event) => event.stopPropagation()}
+              onMouseDownCapture={(event) => event.stopPropagation()}
+            >
+              {" "}
+              <span className="rjsf-builder__insert-rule" />{" "}
+              <button
+                type="button"
+                className="rjsf-builder__insert-plus"
+                title="Insert a field here"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setInsertSearch("");
+                  setInsertAfterKey((current) =>
+                    current === itemKey ? null : itemKey
+                  );
+                }}
+              >
+                +
+              </button>{" "}
+              {insertAfterKey === itemKey ? (
+                <div className="rjsf-builder__insert-pal">
+                  {" "}
+                  <input
+                    className="rjsf-builder__input"
+                    autoFocus
+                    placeholder="Search field types..."
+                    value={insertSearch}
+                    onChange={(event) => setInsertSearch(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") {
+                        setInsertAfterKey(null);
+                      }
+                    }}
+                  />{" "}
+                  <div className="rjsf-builder__insert-grid">
+                    {" "}
+                    {FIELD_TYPES.filter(
+                      (entry) =>
+                        entry.type !== "switch" &&
+                        entry.type !== "systemDatagrid2" &&
+                        entry.label
+                          .toLowerCase()
+                          .includes(insertSearch.trim().toLowerCase())
+                    ).map((entry) => (
+                      <button
+                        key={entry.type}
+                        type="button"
+                        onClick={() => {
+                          onPreviewDropField(
+                            entry.type,
+                            section.title || undefined,
+                            itemKey,
+                            "after"
+                          );
+                          setInsertAfterKey(null);
+                        }}
+                      >
+                        {entry.label}
+                      </button>
+                    ))}{" "}
+                  </div>{" "}
+                </div>
+              ) : null}{" "}
+            </div>
+          ) : null}{" "}
         </div>
       );
     },
@@ -8092,6 +8165,9 @@ function ObjectTemplate(props: any): ReactElement {
       dragOverSlot,
       handleDropOnTarget,
       handleResizePointerDown,
+      insertAfterKey,
+      insertSearch,
+      onPreviewDropField,
       onPreviewSelectKey,
       onPreviewOpenDataGridSettings,
       previewBadgeMetaByKey,
@@ -13988,6 +14064,23 @@ export default function FormStudioBuilder(
                       </button>{" "}
                     </div>{" "}
                     {isPropertiesTab ? (
+                      <details
+                        key={`grp-setup-${selectedComponent.id}`}
+                        className="rjsf-builder__group"
+                        open
+                      >
+                        <summary>
+                          <span className="rjsf-builder__group-chev">▶</span>
+                          Field setup
+                          <span className="rjsf-builder__group-peek">
+                            {`${selectedComponent.key} · ${
+                              FIELD_TYPES.find(
+                                (entry) => entry.type === selectedComponent.type
+                              )?.label || selectedComponent.type
+                            }`}
+                          </span>
+                        </summary>
+                        <div className="rjsf-builder__group-body">
                       <Fragment>
                         {" "}
                         {selectedComponentSharedEntry ? null : (
@@ -15038,6 +15131,8 @@ export default function FormStudioBuilder(
                           </div>
                         ) : null}{" "}
                       </Fragment>
+                        </div>
+                      </details>
                     ) : null}{" "}
                     {isDocumentOutputTab ? (
                       selectedComponent.type === "systemDatagrid2" ? (
@@ -15623,10 +15718,27 @@ export default function FormStudioBuilder(
                       </Fragment>
                     ) : null}{" "}
                     {isPropertiesTab &&
-                    !selectedComponentSharedEntry &&
                     selectedComponent.type !== "total" &&
+                    selectedComponent.type !== "systemDatagrid2" &&
+                    selectedComponent.type !== "contentBlock" ? (
+                      <details
+                        key={`grp-value-${selectedComponent.id}`}
+                        className="rjsf-builder__group"
+                      >
+                        <summary>
+                          <span className="rjsf-builder__group-chev">▶</span>
+                          Value &amp; prefill
+                          <span className="rjsf-builder__group-peek">
+                            {clean(selectedComponent.prefillTokenKey) ||
+                              (selectedComponent.defaultValue != null &&
+                              selectedComponent.defaultValue !== ""
+                                ? "default set"
+                                : "none")}
+                          </span>
+                        </summary>
+                        <div className="rjsf-builder__group-body">
+                    {!selectedComponentSharedEntry &&
                     selectedComponent.type !== "datagrid" &&
-                    selectedComponent.type !== "contentBlock" &&
                     selectedComponent.type !== "matrix" &&
                     selectedComponent.type !== "slider" ? (
                       <label className="rjsf-builder__field">
@@ -15656,9 +15768,7 @@ export default function FormStudioBuilder(
                     ) : null}{" "}
                     {isPropertiesTab &&
                     !selectedComponentSharedEntry &&
-                    selectedComponent.type !== "total" &&
                     selectedComponent.type !== "datagrid" &&
-                    selectedComponent.type !== "contentBlock" &&
                     selectedComponent.type !== "matrix" ? (
                       <label className="rjsf-builder__field">
                         {" "}
@@ -15694,8 +15804,6 @@ export default function FormStudioBuilder(
                     !selectedComponentSharedEntry &&
                     source?.publishFieldKeyAttr &&
                     source?.onPublishFieldAction &&
-                    selectedComponent.type !== "systemDatagrid2" &&
-                    selectedComponent.type !== "contentBlock" &&
                     !selectedComponent.multiSelect &&
                     !selectedComponent.repeatGroup ? (
                       <div className="rjsf-builder__field">
@@ -15777,6 +15885,9 @@ export default function FormStudioBuilder(
                           form.
                         </span>{" "}
                       </label>
+                    ) : null}{" "}
+                        </div>
+                      </details>
                     ) : null}{" "}
                     {isValidationTab && selectedComponentSharedEntry ? (
                       <span className="rjsf-builder__help">
@@ -16160,6 +16271,25 @@ export default function FormStudioBuilder(
                       </div>
                     ) : null}{" "}
                     {isPropertiesTab && selectedComponent.type === "total" ? (
+                      <details
+                        key={`grp-score-${selectedComponent.id}`}
+                        className="rjsf-builder__group"
+                        open
+                      >
+                        <summary>
+                          <span className="rjsf-builder__group-chev">▶</span>
+                          Score &amp; interpretation
+                          <span className="rjsf-builder__group-peek">
+                            {selectedComponent.scoreBands?.length
+                              ? `${selectedComponent.scoreBands.length} band${
+                                  selectedComponent.scoreBands.length === 1
+                                    ? ""
+                                    : "s"
+                                }`
+                              : "no bands"}
+                          </span>
+                        </summary>
+                        <div className="rjsf-builder__group-body">
                       <div className="rjsf-builder__block">
                         {" "}
                         <label className="rjsf-builder__field">
@@ -16404,6 +16534,8 @@ export default function FormStudioBuilder(
                           + Add score band{" "}
                         </button>{" "}
                       </div>
+                        </div>
+                      </details>
                     ) : null}{" "}
                     {isValidationTab ? (
                       <div className="rjsf-builder__split">
@@ -16451,12 +16583,23 @@ export default function FormStudioBuilder(
                     selectedComponent.type !== "datagrid" &&
                     selectedComponent.type !== "contentBlock" &&
                     selectedComponent.type !== "matrix" ? (
+                      <details
+                        key={`grp-repeat-${selectedComponent.id}`}
+                        className="rjsf-builder__group"
+                        open={Boolean(selectedComponent.repeatGroup?.key)}
+                      >
+                        <summary>
+                          <span className="rjsf-builder__group-chev">▶</span>
+                          Repeatable group
+                          <span className="rjsf-builder__group-peek">
+                            {selectedComponent.repeatGroup?.key
+                              ? selectedComponent.repeatGroup.key
+                              : "off"}
+                          </span>
+                        </summary>
+                        <div className="rjsf-builder__group-body">
                       <div className="rjsf-builder__block">
                         {" "}
-                        <div className="rjsf-builder__subtitle">
-                          {" "}
-                          Repeatable group{" "}
-                        </div>{" "}
                         <label className="rjsf-builder__toggle">
                           {" "}
                           <input
@@ -16824,14 +16967,34 @@ export default function FormStudioBuilder(
                           </div>
                         ) : null}{" "}
                       </div>
+                        </div>
+                      </details>
                     ) : null}{" "}
                     {isPropertiesTab ? (
+                      <details
+                        key={`grp-vis-${selectedComponent.id}`}
+                        className="rjsf-builder__group"
+                        open={Boolean(
+                          selectedComponent.visibility?.rules?.length
+                        )}
+                      >
+                        <summary>
+                          <span className="rjsf-builder__group-chev">▶</span>
+                          Conditional visibility
+                          <span className="rjsf-builder__group-peek">
+                            {selectedComponent.visibility?.rules?.length
+                              ? `${selectedComponent.visibility.rules.length} rule${
+                                  selectedComponent.visibility.rules.length ===
+                                  1
+                                    ? ""
+                                    : "s"
+                                }`
+                              : "no rules"}
+                          </span>
+                        </summary>
+                        <div className="rjsf-builder__group-body">
                       <div className="rjsf-builder__block">
                         {" "}
-                        <div className="rjsf-builder__subtitle">
-                          {" "}
-                          Conditional visibility{" "}
-                        </div>{" "}
                         <label className="rjsf-builder__toggle">
                           {" "}
                           <input
@@ -17097,6 +17260,8 @@ export default function FormStudioBuilder(
                           </div>
                         ) : null}{" "}
                       </div>
+                        </div>
+                      </details>
                     ) : null}{" "}
                     <div className="rjsf-builder__button-row">
                       {" "}
