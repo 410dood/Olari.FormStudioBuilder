@@ -3602,6 +3602,25 @@ function createChoiceOptionDraft(
   choiceOptionDraftId += 1;
   return { id: `opt_${choiceOptionDraftId}`, label, value, score };
 }
+// Multi-line paste into the options editor: one option per line; tab or "|"
+// splits label / value / score, so a spreadsheet paste maps columns directly.
+function parsePastedOptionLines(
+  text: string
+): Array<{ label: string; value: string; score: string }> {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const parts = line.split(/\t|\s*\|\s*/);
+      return {
+        label: clean(parts[0]),
+        value: clean(parts[1] ?? ""),
+        score: clean(parts[2] ?? "")
+      };
+    })
+    .filter((entry) => entry.label);
+}
 function parseOptionScoreMap(
   value: unknown
 ): Record<string, number> | undefined {
@@ -9630,6 +9649,10 @@ export default function FormStudioBuilder(
   const [recentTemplateTokens, setRecentTemplateTokens] = useState<string[]>(
     []
   );
+  const choiceDragIndexRef = useRef<number | null>(null);
+  const [choiceDragOverIndex, setChoiceDragOverIndex] = useState<number | null>(
+    null
+  );
   const [choiceOptionsDraft, setChoiceOptionsDraft] = useState<
     ChoiceOptionDraft[]
   >([]);
@@ -14501,76 +14524,106 @@ export default function FormStudioBuilder(
                             <div className="rjsf-builder__subtitle">
                               Options
                             </div>{" "}
-                            <div className="rjsf-builder__choice-grid">
+                            <div className="rjsf-builder__choice-grid rjsf-builder__choice-grid--draggable">
                               {" "}
                               <div className="rjsf-builder__choice-grid-header">
                                 {" "}
-                                <span>Order</span> <span>Label</span>{" "}
+                                <span /> <span>Label</span>{" "}
                                 <span>Value</span> <span>Score</span>{" "}
-                                <span>Remove</span>{" "}
+                                <span />{" "}
                               </div>{" "}
                               {choiceOptionsDraft.map((row, rowIndex) => (
                                 <div
-                                  className="rjsf-builder__choice-grid-row"
+                                  className={`rjsf-builder__choice-grid-row${
+                                    choiceDragOverIndex === rowIndex
+                                      ? " is-drag-over"
+                                      : ""
+                                  }`}
                                   key={row.id}
+                                  onDragOver={(event) => {
+                                    if (choiceDragIndexRef.current == null) {
+                                      return;
+                                    }
+                                    event.preventDefault();
+                                    setChoiceDragOverIndex(rowIndex);
+                                  }}
+                                  onDrop={(event) => {
+                                    const from = choiceDragIndexRef.current;
+                                    choiceDragIndexRef.current = null;
+                                    setChoiceDragOverIndex(null);
+                                    if (from == null || from === rowIndex) {
+                                      return;
+                                    }
+                                    event.preventDefault();
+                                    const nextRows = [...choiceOptionsDraft];
+                                    const [moved] = nextRows.splice(from, 1);
+                                    nextRows.splice(rowIndex, 0, moved);
+                                    setChoiceOptionsDraft(nextRows);
+                                    persistChoiceOptionsDraft(
+                                      selectedComponent.id,
+                                      nextRows
+                                    );
+                                  }}
                                 >
                                   {" "}
-                                  <div className="rjsf-builder__choice-order">
-                                    {" "}
-                                    <button
-                                      type="button"
-                                      className="rjsf-builder__button rjsf-builder__button--small"
-                                      disabled={rowIndex === 0}
-                                      onClick={() => {
-                                        const nextRows = [
-                                          ...choiceOptionsDraft
-                                        ];
-                                        const [moved] = nextRows.splice(
-                                          rowIndex,
-                                          1
-                                        );
-                                        nextRows.splice(rowIndex - 1, 0, moved);
-                                        setChoiceOptionsDraft(nextRows);
-                                        persistChoiceOptionsDraft(
-                                          selectedComponent.id,
-                                          nextRows
-                                        );
-                                      }}
-                                    >
-                                      {" "}
-                                      Up{" "}
-                                    </button>{" "}
-                                    <button
-                                      type="button"
-                                      className="rjsf-builder__button rjsf-builder__button--small"
-                                      disabled={
-                                        rowIndex >=
-                                        choiceOptionsDraft.length - 1
-                                      }
-                                      onClick={() => {
-                                        const nextRows = [
-                                          ...choiceOptionsDraft
-                                        ];
-                                        const [moved] = nextRows.splice(
-                                          rowIndex,
-                                          1
-                                        );
-                                        nextRows.splice(rowIndex + 1, 0, moved);
-                                        setChoiceOptionsDraft(nextRows);
-                                        persistChoiceOptionsDraft(
-                                          selectedComponent.id,
-                                          nextRows
-                                        );
-                                      }}
-                                    >
-                                      {" "}
-                                      Down{" "}
-                                    </button>{" "}
-                                  </div>{" "}
+                                  <span
+                                    className="rjsf-builder__choice-drag"
+                                    title="Drag to reorder"
+                                    draggable
+                                    onDragStart={(event) => {
+                                      choiceDragIndexRef.current = rowIndex;
+                                      event.dataTransfer.effectAllowed =
+                                        "move";
+                                    }}
+                                    onDragEnd={() => {
+                                      choiceDragIndexRef.current = null;
+                                      setChoiceDragOverIndex(null);
+                                    }}
+                                  >
+                                    ⋮⋮
+                                  </span>{" "}
                                   <input
                                     className="rjsf-builder__input"
                                     value={row.label}
                                     placeholder="Option label"
+                                    onPaste={(event) => {
+                                      const text =
+                                        event.clipboardData.getData("text");
+                                      if (!text.includes("\n")) {
+                                        return;
+                                      }
+                                      event.preventDefault();
+                                      const parsed =
+                                        parsePastedOptionLines(text);
+                                      if (!parsed.length) {
+                                        return;
+                                      }
+                                      const newRows = parsed.map((entry) =>
+                                        createChoiceOptionDraft(
+                                          entry.label,
+                                          entry.value,
+                                          entry.score
+                                        )
+                                      );
+                                      const nextRows = [...choiceOptionsDraft];
+                                      const isEmptyRow =
+                                        !clean(row.label) &&
+                                        !clean(row.value) &&
+                                        !clean(row.score);
+                                      nextRows.splice(
+                                        rowIndex + (isEmptyRow ? 0 : 1),
+                                        isEmptyRow ? 1 : 0,
+                                        ...newRows
+                                      );
+                                      setChoiceOptionsDraft(nextRows);
+                                      persistChoiceOptionsDraft(
+                                        selectedComponent.id,
+                                        nextRows
+                                      );
+                                      setMessage(
+                                        `Added ${newRows.length} options from the pasted list.`
+                                      );
+                                    }}
                                     onChange={(event) =>
                                       setChoiceOptionsDraft((current) =>
                                         current.map((item) =>
@@ -14640,7 +14693,8 @@ export default function FormStudioBuilder(
                                   />{" "}
                                   <button
                                     type="button"
-                                    className="rjsf-builder__button rjsf-builder__button--small rjsf-builder__button--danger"
+                                    className="rjsf-builder__col-action rjsf-builder__col-action--danger"
+                                    title="Remove option"
                                     onClick={() => {
                                       const nextRows =
                                         choiceOptionsDraft.filter(
@@ -14652,8 +14706,7 @@ export default function FormStudioBuilder(
                                       );
                                     }}
                                   >
-                                    {" "}
-                                    X{" "}
+                                    ✕
                                   </button>{" "}
                                 </div>
                               ))}{" "}
@@ -14677,9 +14730,12 @@ export default function FormStudioBuilder(
                             </div>{" "}
                             <div className="rjsf-builder__help">
                               {" "}
-                              Leave value blank to use the label. Duplicate
-                              values are ignored. Score is optional: scored
-                              options feed Calculated total fields.{" "}
+                              Drag ⋮⋮ to reorder. Paste a multi-line list into
+                              any Label box to add one option per line — tabs
+                              or &ldquo;|&rdquo; split label, value, and score,
+                              so a spreadsheet paste just works. Leave value
+                              blank to use the label. Scored options feed
+                              Calculated total fields.{" "}
                             </div>{" "}
                           </div>
                         ) : null}{" "}

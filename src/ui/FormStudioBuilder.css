@@ -3818,3 +3818,24 @@ details.rjsf-builder__group[open] .rjsf-builder__group-chev { transform: rotate(
   padding: 12px;
   border-top: 1px solid var(--rb-border);
 }
+
+/* Options editor: drag-reorder rows */
+.rjsf-builder__choice-grid--draggable .rjsf-builder__choice-grid-header,
+.rjsf-builder__choice-grid--draggable .rjsf-builder__choice-grid-row {
+  grid-template-columns: 26px minmax(0, 1fr) minmax(0, 1fr) 72px 32px;
+}
+
+.rjsf-builder__choice-drag {
+  cursor: grab;
+  color: var(--rb-muted);
+  font-size: 13px;
+  letter-spacing: -2px;
+  text-align: center;
+  user-select: none;
+}
+
+.rjsf-builder__choice-drag:active { cursor: grabbing; }
+
+.rjsf-builder__choice-grid-row.is-drag-over {
+  box-shadow: inset 0 2px 0 var(--rb-accent);
+}
