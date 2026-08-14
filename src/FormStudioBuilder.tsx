@@ -7267,6 +7267,8 @@ function ObjectTemplate(props: any): ReactElement {
     >;
     activeSectionKey?: string;
     onActiveSectionChange?: (sectionKey: string) => void;
+    /** Designer canvas only: powers the selected-field action toolbar. */
+    onPreviewFieldAction?: (action: "duplicate" | "copy" | "delete") => void;
     wizard?: {
       enabled: boolean;
       activeKey: string | null;
@@ -7982,6 +7984,49 @@ function ObjectTemplate(props: any): ReactElement {
             >
               {" "}
               :::{" "}
+            </div>
+          ) : null}{" "}
+          {isSelected &&
+          reorderEnabled &&
+          typeof formContext.onPreviewFieldAction === "function" ? (
+            <div className="rjsf-builder__col-actions">
+              {" "}
+              <button
+                type="button"
+                className="rjsf-builder__col-action"
+                title="Duplicate field (Ctrl+D)"
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  formContext.onPreviewFieldAction?.("duplicate");
+                }}
+              >
+                ⧉
+              </button>{" "}
+              <button
+                type="button"
+                className="rjsf-builder__col-action"
+                title="Copy field (Ctrl+C) — paste into this or another form with Ctrl+V"
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  formContext.onPreviewFieldAction?.("copy");
+                }}
+              >
+                ⎘
+              </button>{" "}
+              <button
+                type="button"
+                className="rjsf-builder__col-action rjsf-builder__col-action--danger"
+                title="Delete field (Del)"
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  formContext.onPreviewFieldAction?.("delete");
+                }}
+              >
+                ✕
+              </button>{" "}
             </div>
           ) : null}{" "}
           {reorderEnabled &&
@@ -11847,6 +11892,18 @@ export default function FormStudioBuilder(
       return { ...current, components: next };
     });
   }, [updateDefinition]);
+  const onPreviewFieldAction = useCallback(
+    (action: "duplicate" | "copy" | "delete") => {
+      if (action === "duplicate") {
+        duplicateSelectedComponent();
+      } else if (action === "copy") {
+        copySelectedComponent();
+      } else {
+        deleteSelectedComponent();
+      }
+    },
+    [duplicateSelectedComponent, copySelectedComponent, deleteSelectedComponent]
+  );
   // Designer keyboard shortcuts: Ctrl+D duplicate, Ctrl+C/V copy/paste,
   // Delete remove, Ctrl+Arrow move. Skipped while typing in any form control
   // so normal editing (and normal copy/paste of text) is untouched.
@@ -13664,6 +13721,12 @@ export default function FormStudioBuilder(
                       Drag toolbox items into Preview/Components, or click to
                       append.{" "}
                     </div>{" "}
+                    <div className="rjsf-builder__help rjsf-builder__help--shortcuts">
+                      {" "}
+                      <b>Shortcuts:</b> Ctrl+D duplicate &middot; Ctrl+C /
+                      Ctrl+V copy &amp; paste field &middot; Del delete &middot;
+                      Ctrl+&uarr;/&darr; move &middot; Ctrl+Z undo{" "}
+                    </div>{" "}
                   </div>
                 ) : null}{" "}
                 {!leftPanelCollapsed && showComponentsPanel ? (
@@ -13803,6 +13866,7 @@ export default function FormStudioBuilder(
                     onPreviewDropField: addComponentInSection,
                     onPreviewMoveComponent: moveComponentToSection,
                     onPreviewSelectKey,
+                    onPreviewFieldAction,
                     showSectionBulkToggle: true,
                     showSectionVisibilityToggle: false,
                     previewSectionSettingsEnabled: true,
@@ -16144,57 +16208,201 @@ export default function FormStudioBuilder(
                                 .join(", ")
                             : "none"}{" "}
                         </div>{" "}
-                        <label className="rjsf-builder__field">
-                          {" "}
-                          <span>Score bands (one per line, min-max: label)</span>{" "}
-                          <textarea
-                            key={`scorebands-${selectedComponent.id}`}
-                            className="rjsf-builder__input rjsf-builder__input--multiline"
-                            rows={4}
-                            placeholder={"0-4: Minimal\n5-9: Mild\n10-14: Moderate\n15-27: Severe"}
-                            defaultValue={(selectedComponent.scoreBands || [])
-                              .map(
-                                (band) => `${band.min}-${band.max}: ${band.label}`
-                              )
-                              .join("\n")}
-                            onBlur={(event) =>
-                              updateDefinition((current) => ({
-                                ...current,
-                                components: current.components.map(
-                                  (component) =>
-                                    component.id === selectedComponent.id
-                                      ? {
-                                          ...component,
-                                          scoreBands: normalizeScoreBands(
-                                            event.target.value
-                                              .split(/\r?\n/)
-                                              .map((line) => {
-                                                const match = line.match(
-                                                  /^\s*(-?\d+(?:\.\d+)?)\s*[-–]\s*(-?\d+(?:\.\d+)?)\s*[:=]\s*(.+)\s*$/
-                                                );
-                                                return match
-                                                  ? {
-                                                      min: Number(match[1]),
-                                                      max: Number(match[2]),
-                                                      label: match[3]
-                                                    }
-                                                  : null;
-                                              })
-                                              .filter(Boolean)
-                                          )
-                                        }
-                                      : component
-                                )
-                              }))
-                            }
-                          />{" "}
-                        </label>{" "}
+                        <div className="rjsf-builder__subtitle rjsf-builder__subtitle--spaced">
+                          Score interpretation
+                        </div>{" "}
                         <div className="rjsf-builder__help">
                           {" "}
-                          The matched band shows next to the live total and is
-                          available in output templates as{" "}
-                          <code>{`{${selectedComponent.key}_band}`}</code>.{" "}
+                          Turn the raw total into a clinical reading. The
+                          matched label shows next to the live score and prints
+                          in narratives as{" "}
+                          <code>{`{${selectedComponent.key}_band}`}</code>. For
+                          example, PHQ&#8209;9: 0&ndash;4 Minimal, 5&ndash;9
+                          Mild, 10&ndash;14 Moderate, 15&ndash;27 Severe.{" "}
                         </div>{" "}
+                        {(selectedComponent.scoreBands || []).map(
+                          (band, bandIndex) => (
+                            <div
+                              key={`band-${selectedComponent.id}-${bandIndex}-${band.min}-${band.max}-${band.label}`}
+                              className="rjsf-builder__band-row"
+                            >
+                              {" "}
+                              <input
+                                type="number"
+                                className="rjsf-builder__input rjsf-builder__band-num"
+                                aria-label="Band minimum"
+                                defaultValue={band.min}
+                                onBlur={(event) => {
+                                  const next = Number(event.target.value);
+                                  if (
+                                    !Number.isFinite(next) ||
+                                    next === band.min
+                                  ) {
+                                    return;
+                                  }
+                                  updateDefinition((current) => ({
+                                    ...current,
+                                    components: current.components.map(
+                                      (component) =>
+                                        component.id === selectedComponent.id
+                                          ? {
+                                              ...component,
+                                              scoreBands: normalizeScoreBands(
+                                                (
+                                                  component.scoreBands || []
+                                                ).map((item, index) =>
+                                                  index === bandIndex
+                                                    ? { ...item, min: next }
+                                                    : item
+                                                )
+                                              )
+                                            }
+                                          : component
+                                    )
+                                  }));
+                                }}
+                              />{" "}
+                              <span className="rjsf-builder__band-sep">to</span>{" "}
+                              <input
+                                type="number"
+                                className="rjsf-builder__input rjsf-builder__band-num"
+                                aria-label="Band maximum"
+                                defaultValue={band.max}
+                                onBlur={(event) => {
+                                  const next = Number(event.target.value);
+                                  if (
+                                    !Number.isFinite(next) ||
+                                    next === band.max
+                                  ) {
+                                    return;
+                                  }
+                                  updateDefinition((current) => ({
+                                    ...current,
+                                    components: current.components.map(
+                                      (component) =>
+                                        component.id === selectedComponent.id
+                                          ? {
+                                              ...component,
+                                              scoreBands: normalizeScoreBands(
+                                                (
+                                                  component.scoreBands || []
+                                                ).map((item, index) =>
+                                                  index === bandIndex
+                                                    ? { ...item, max: next }
+                                                    : item
+                                                )
+                                              )
+                                            }
+                                          : component
+                                    )
+                                  }));
+                                }}
+                              />{" "}
+                              <input
+                                type="text"
+                                className="rjsf-builder__input rjsf-builder__band-label"
+                                aria-label="Band label"
+                                placeholder="e.g. Moderate depression"
+                                defaultValue={band.label}
+                                onBlur={(event) => {
+                                  const next = clean(event.target.value);
+                                  if (!next || next === band.label) {
+                                    return;
+                                  }
+                                  updateDefinition((current) => ({
+                                    ...current,
+                                    components: current.components.map(
+                                      (component) =>
+                                        component.id === selectedComponent.id
+                                          ? {
+                                              ...component,
+                                              scoreBands: normalizeScoreBands(
+                                                (
+                                                  component.scoreBands || []
+                                                ).map((item, index) =>
+                                                  index === bandIndex
+                                                    ? { ...item, label: next }
+                                                    : item
+                                                )
+                                              )
+                                            }
+                                          : component
+                                    )
+                                  }));
+                                }}
+                              />{" "}
+                              <button
+                                type="button"
+                                className="rjsf-builder__col-action rjsf-builder__col-action--danger"
+                                title="Remove this band"
+                                onClick={() =>
+                                  updateDefinition((current) => ({
+                                    ...current,
+                                    components: current.components.map(
+                                      (component) =>
+                                        component.id === selectedComponent.id
+                                          ? {
+                                              ...component,
+                                              scoreBands: normalizeScoreBands(
+                                                (
+                                                  component.scoreBands || []
+                                                ).filter(
+                                                  (_item, index) =>
+                                                    index !== bandIndex
+                                                )
+                                              )
+                                            }
+                                          : component
+                                    )
+                                  }))
+                                }
+                              >
+                                ✕
+                              </button>{" "}
+                            </div>
+                          )
+                        )}{" "}
+                        <button
+                          type="button"
+                          className="rjsf-builder__button rjsf-builder__button--ghost"
+                          onClick={() =>
+                            updateDefinition((current) => ({
+                              ...current,
+                              components: current.components.map((component) =>
+                                component.id === selectedComponent.id
+                                  ? {
+                                      ...component,
+                                      scoreBands: [
+                                        ...(component.scoreBands || []),
+                                        {
+                                          min:
+                                            (component.scoreBands?.length
+                                              ? Math.max(
+                                                  ...component.scoreBands.map(
+                                                    (item) => item.max
+                                                  )
+                                                )
+                                              : -1) + 1,
+                                          max:
+                                            (component.scoreBands?.length
+                                              ? Math.max(
+                                                  ...component.scoreBands.map(
+                                                    (item) => item.max
+                                                  )
+                                                )
+                                              : -1) + 10,
+                                          label: ""
+                                        }
+                                      ]
+                                    }
+                                  : component
+                              )
+                            }))
+                          }
+                        >
+                          {" "}
+                          + Add score band{" "}
+                        </button>{" "}
                       </div>
                     ) : null}{" "}
                     {isValidationTab ? (
