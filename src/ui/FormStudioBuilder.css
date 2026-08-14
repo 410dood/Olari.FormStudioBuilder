@@ -1652,7 +1652,9 @@
   resize: vertical;
 }
 
-.rjsf-builder__object--labels-inline .field:not(.field-boolean):not(.field-array):not(.field-object) {
+/* Field wrappers render as .form-group.rjsf-field (custom field template) —
+   the RJSF default .field classes never appear in this bundle. */
+.rjsf-builder__object--labels-inline .form-group.rjsf-field:not(.rjsf-field-boolean):not(.rjsf-field-array):not(.rjsf-field-object) {
   display: grid;
   grid-template-columns: minmax(140px, 220px) minmax(0, 1fr);
   column-gap: 10px;
@@ -1660,28 +1662,30 @@
   align-items: start;
 }
 
-.rjsf-builder__object--labels-inline .field:not(.field-boolean):not(.field-array):not(.field-object) > label,
-.rjsf-builder__object--labels-inline .field:not(.field-boolean):not(.field-array):not(.field-object) > .control-label {
+.rjsf-builder__object--labels-inline .form-group.rjsf-field:not(.rjsf-field-boolean):not(.rjsf-field-array):not(.rjsf-field-object) > label,
+.rjsf-builder__object--labels-inline .form-group.rjsf-field:not(.rjsf-field-boolean):not(.rjsf-field-array):not(.rjsf-field-object) > .control-label {
   grid-column: 1;
   margin: 0;
   align-self: center;
 }
 
-.rjsf-builder__object--labels-inline .field:not(.field-boolean):not(.field-array):not(.field-object) > :not(label):not(.control-label) {
+.rjsf-builder__object--labels-inline .form-group.rjsf-field:not(.rjsf-field-boolean):not(.rjsf-field-array):not(.rjsf-field-object) > :not(label):not(.control-label) {
   grid-column: 2;
   min-width: 0;
 }
 
+.rjsf-builder .form-group.rjsf-builder__field-label-hidden > label,
+.rjsf-builder .form-group.rjsf-builder__field-label-hidden > .control-label,
 .rjsf-builder .field.rjsf-builder__field-label-hidden > label,
 .rjsf-builder .field.rjsf-builder__field-label-hidden > .control-label {
   display: none !important;
 }
 
-.rjsf-builder__object--labels-inline .field.rjsf-builder__field-label-hidden:not(.field-boolean):not(.field-array):not(.field-object) > :not(label):not(.control-label) {
+.rjsf-builder__object--labels-inline .form-group.rjsf-field.rjsf-builder__field-label-hidden:not(.rjsf-field-boolean):not(.rjsf-field-array):not(.rjsf-field-object) > :not(label):not(.control-label) {
   grid-column: 1;
 }
 
-.rjsf-builder__object:not(.rjsf-builder__object--labels-inline) .field.rjsf-builder__field-label-inline:not(.field-boolean):not(.field-array):not(.field-object) {
+.rjsf-builder__object:not(.rjsf-builder__object--labels-inline) .form-group.rjsf-field.rjsf-builder__field-label-inline:not(.rjsf-field-boolean):not(.rjsf-field-array):not(.rjsf-field-object) {
   display: grid;
   grid-template-columns: minmax(140px, 220px) minmax(0, 1fr);
   column-gap: 10px;
@@ -1689,24 +1693,143 @@
   align-items: start;
 }
 
-.rjsf-builder__object:not(.rjsf-builder__object--labels-inline) .field.rjsf-builder__field-label-inline:not(.field-boolean):not(.field-array):not(.field-object) > label,
-.rjsf-builder__object:not(.rjsf-builder__object--labels-inline) .field.rjsf-builder__field-label-inline:not(.field-boolean):not(.field-array):not(.field-object) > .control-label {
+.rjsf-builder__object:not(.rjsf-builder__object--labels-inline) .form-group.rjsf-field.rjsf-builder__field-label-inline:not(.rjsf-field-boolean):not(.rjsf-field-array):not(.rjsf-field-object) > label,
+.rjsf-builder__object:not(.rjsf-builder__object--labels-inline) .form-group.rjsf-field.rjsf-builder__field-label-inline:not(.rjsf-field-boolean):not(.rjsf-field-array):not(.rjsf-field-object) > .control-label {
   grid-column: 1;
   margin: 0;
   align-self: center;
 }
 
-.rjsf-builder__object:not(.rjsf-builder__object--labels-inline) .field.rjsf-builder__field-label-inline:not(.field-boolean):not(.field-array):not(.field-object) > :not(label):not(.control-label) {
+.rjsf-builder__object:not(.rjsf-builder__object--labels-inline) .form-group.rjsf-field.rjsf-builder__field-label-inline:not(.rjsf-field-boolean):not(.rjsf-field-array):not(.rjsf-field-object) > :not(label):not(.control-label) {
   grid-column: 2;
   min-width: 0;
 }
 
-.rjsf-builder__object--labels-inline .field.rjsf-builder__field-label-block:not(.field-boolean):not(.field-array):not(.field-object) {
+.rjsf-builder__object--labels-inline .form-group.rjsf-field.rjsf-builder__field-label-block:not(.rjsf-field-boolean):not(.rjsf-field-array):not(.rjsf-field-object) {
   grid-template-columns: minmax(0, 1fr);
 }
 
-.rjsf-builder__object--labels-inline .field.rjsf-builder__field-label-block:not(.field-boolean):not(.field-array):not(.field-object) > :not(label):not(.control-label) {
+.rjsf-builder__object--labels-inline .form-group.rjsf-field.rjsf-builder__field-label-block:not(.rjsf-field-boolean):not(.rjsf-field-array):not(.rjsf-field-object) > :not(label):not(.control-label) {
   grid-column: 1;
+}
+
+/* "Modern" option style: radios render as segmented buttons, checkboxes as
+   boxed cards. Opt-in per field via optionStyle="modern". Uses :has() for the
+   checked state (supported by every browser Mendix 11 supports). */
+.form-group.rjsf-builder__field--opt-modern .field-radio-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.form-group.rjsf-builder__field--opt-modern .field-radio-group > .radio {
+  margin: 0;
+}
+
+.form-group.rjsf-builder__field--opt-modern .field-radio-group > .radio > label {
+  display: block;
+  margin: 0;
+  padding: 10px 22px;
+  border: 1px solid var(--rb-border);
+  border-radius: 10px;
+  background: var(--rb-surface);
+  color: var(--rb-text);
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease,
+    color 120ms ease;
+}
+
+.form-group.rjsf-builder__field--opt-modern .field-radio-group > .radio > label:hover {
+  border-color: var(--rb-accent);
+}
+
+.form-group.rjsf-builder__field--opt-modern .field-radio-group input[type="radio"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.form-group.rjsf-builder__field--opt-modern .field-radio-group > .radio:has(input:checked) > label {
+  border-color: var(--rb-accent);
+  color: var(--rb-accent);
+  background: color-mix(in srgb, var(--rb-accent) 8%, var(--rb-surface));
+}
+
+.form-group.rjsf-builder__field--opt-modern .field-radio-group > .radio:has(input:focus-visible) > label {
+  outline: 2px solid var(--rb-accent);
+  outline-offset: 2px;
+}
+
+.form-group.rjsf-builder__field--opt-modern .checkbox > label,
+.form-group.rjsf-builder__field--opt-modern .checkboxes > .checkbox > label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  padding: 12px 16px;
+  border: 1px solid var(--rb-border);
+  border-radius: 10px;
+  background: var(--rb-surface);
+  color: var(--rb-text);
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.form-group.rjsf-builder__field--opt-modern .checkbox > label:hover,
+.form-group.rjsf-builder__field--opt-modern .checkboxes > .checkbox > label:hover {
+  border-color: var(--rb-accent);
+}
+
+.form-group.rjsf-builder__field--opt-modern .checkbox > label > span,
+.form-group.rjsf-builder__field--opt-modern .checkboxes > .checkbox > label > span {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.form-group.rjsf-builder__field--opt-modern .checkbox input[type="checkbox"],
+.form-group.rjsf-builder__field--opt-modern .checkboxes input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--rb-accent);
+  flex: 0 0 auto;
+}
+
+.form-group.rjsf-builder__field--opt-modern .checkbox:has(input:checked) > label,
+.form-group.rjsf-builder__field--opt-modern .checkboxes > .checkbox:has(input:checked) > label {
+  border-color: var(--rb-accent);
+  background: color-mix(in srgb, var(--rb-accent) 6%, var(--rb-surface));
+}
+
+.form-group.rjsf-builder__field--opt-modern .checkboxes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Inline layout also flows choice options horizontally (radio groups,
+   multi-select checkboxes, yes/no). Block-override fields keep the stack. */
+.rjsf-builder__object--labels-inline .form-group.rjsf-field:not(.rjsf-builder__field-label-block) .field-radio-group,
+.rjsf-builder__object--labels-inline .form-group.rjsf-field:not(.rjsf-builder__field-label-block) .checkboxes,
+.rjsf-builder__object:not(.rjsf-builder__object--labels-inline) .form-group.rjsf-field.rjsf-builder__field-label-inline .field-radio-group,
+.rjsf-builder__object:not(.rjsf-builder__object--labels-inline) .form-group.rjsf-field.rjsf-builder__field-label-inline .checkboxes {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 16px;
+  row-gap: 4px;
+  align-items: center;
+}
+
+.rjsf-builder__object--labels-inline .form-group.rjsf-field:not(.rjsf-builder__field-label-block) .field-radio-group > .radio,
+.rjsf-builder__object--labels-inline .form-group.rjsf-field:not(.rjsf-builder__field-label-block) .checkboxes > .checkbox,
+.rjsf-builder__object:not(.rjsf-builder__object--labels-inline) .form-group.rjsf-field.rjsf-builder__field-label-inline .field-radio-group > .radio,
+.rjsf-builder__object:not(.rjsf-builder__object--labels-inline) .form-group.rjsf-field.rjsf-builder__field-label-inline .checkboxes > .checkbox {
+  margin-top: 0;
+  margin-bottom: 0;
 }
 
 .rjsf-builder__viewer .field,
@@ -1857,9 +1980,9 @@
 }
 
 /* Switch field: render the boolean checkbox as a toggle pill */
-.rjsf-builder__viewer .field.rjsf-builder__field--switch input[type="checkbox"],
-.rjsf-builder__panel--preview .field.rjsf-builder__field--switch input[type="checkbox"],
-.rjsf-builder__panel--preview-full .field.rjsf-builder__field--switch input[type="checkbox"] {
+.rjsf-builder__viewer .form-group.rjsf-builder__field--switch input[type="checkbox"],
+.rjsf-builder__panel--preview .form-group.rjsf-builder__field--switch input[type="checkbox"],
+.rjsf-builder__panel--preview-full .form-group.rjsf-builder__field--switch input[type="checkbox"] {
   width: 34px;
   min-width: 34px;
   height: 18px;
@@ -1869,9 +1992,9 @@
   border-color: #cbd5e1;
 }
 
-.rjsf-builder__viewer .field.rjsf-builder__field--switch input[type="checkbox"]::before,
-.rjsf-builder__panel--preview .field.rjsf-builder__field--switch input[type="checkbox"]::before,
-.rjsf-builder__panel--preview-full .field.rjsf-builder__field--switch input[type="checkbox"]::before {
+.rjsf-builder__viewer .form-group.rjsf-builder__field--switch input[type="checkbox"]::before,
+.rjsf-builder__panel--preview .form-group.rjsf-builder__field--switch input[type="checkbox"]::before,
+.rjsf-builder__panel--preview-full .form-group.rjsf-builder__field--switch input[type="checkbox"]::before {
   width: 12px;
   height: 12px;
   border: none;
@@ -1882,29 +2005,29 @@
   transition: transform 140ms ease;
 }
 
-.rjsf-builder__viewer .field.rjsf-builder__field--switch input[type="checkbox"]:checked,
-.rjsf-builder__panel--preview .field.rjsf-builder__field--switch input[type="checkbox"]:checked,
-.rjsf-builder__panel--preview-full .field.rjsf-builder__field--switch input[type="checkbox"]:checked {
+.rjsf-builder__viewer .form-group.rjsf-builder__field--switch input[type="checkbox"]:checked,
+.rjsf-builder__panel--preview .form-group.rjsf-builder__field--switch input[type="checkbox"]:checked,
+.rjsf-builder__panel--preview-full .form-group.rjsf-builder__field--switch input[type="checkbox"]:checked {
   border-color: var(--rb-accent);
   background: var(--rb-accent);
 }
 
-.rjsf-builder__viewer .field.rjsf-builder__field--switch input[type="checkbox"]:checked::before,
-.rjsf-builder__panel--preview .field.rjsf-builder__field--switch input[type="checkbox"]:checked::before,
-.rjsf-builder__panel--preview-full .field.rjsf-builder__field--switch input[type="checkbox"]:checked::before {
+.rjsf-builder__viewer .form-group.rjsf-builder__field--switch input[type="checkbox"]:checked::before,
+.rjsf-builder__panel--preview .form-group.rjsf-builder__field--switch input[type="checkbox"]:checked::before,
+.rjsf-builder__panel--preview-full .form-group.rjsf-builder__field--switch input[type="checkbox"]:checked::before {
   transform: translateX(8px);
 }
 
-.rjsf-builder--theme-contrast .rjsf-builder__viewer .field.rjsf-builder__field--switch input[type="checkbox"],
-.rjsf-builder--theme-contrast .rjsf-builder__panel--preview .field.rjsf-builder__field--switch input[type="checkbox"],
-.rjsf-builder--theme-contrast .rjsf-builder__panel--preview-full .field.rjsf-builder__field--switch input[type="checkbox"] {
+.rjsf-builder--theme-contrast .rjsf-builder__viewer .form-group.rjsf-builder__field--switch input[type="checkbox"],
+.rjsf-builder--theme-contrast .rjsf-builder__panel--preview .form-group.rjsf-builder__field--switch input[type="checkbox"],
+.rjsf-builder--theme-contrast .rjsf-builder__panel--preview-full .form-group.rjsf-builder__field--switch input[type="checkbox"] {
   background: #475569;
   border-color: #475569;
 }
 
-.rjsf-builder--theme-contrast .rjsf-builder__viewer .field.rjsf-builder__field--switch input[type="checkbox"]:checked,
-.rjsf-builder--theme-contrast .rjsf-builder__panel--preview .field.rjsf-builder__field--switch input[type="checkbox"]:checked,
-.rjsf-builder--theme-contrast .rjsf-builder__panel--preview-full .field.rjsf-builder__field--switch input[type="checkbox"]:checked {
+.rjsf-builder--theme-contrast .rjsf-builder__viewer .form-group.rjsf-builder__field--switch input[type="checkbox"]:checked,
+.rjsf-builder--theme-contrast .rjsf-builder__panel--preview .form-group.rjsf-builder__field--switch input[type="checkbox"]:checked,
+.rjsf-builder--theme-contrast .rjsf-builder__panel--preview-full .form-group.rjsf-builder__field--switch input[type="checkbox"]:checked {
   border-color: #60a5fa;
   background: #60a5fa;
 }
@@ -3043,19 +3166,19 @@
     grid-column: auto !important;
   }
 
-  .rjsf-builder__object--labels-inline .field:not(.field-boolean):not(.field-array):not(.field-object) {
+  .rjsf-builder__object--labels-inline .form-group.rjsf-field:not(.rjsf-field-boolean):not(.rjsf-field-array):not(.rjsf-field-object) {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .rjsf-builder__object--labels-inline .field:not(.field-boolean):not(.field-array):not(.field-object) > :not(label):not(.control-label) {
+  .rjsf-builder__object--labels-inline .form-group.rjsf-field:not(.rjsf-field-boolean):not(.rjsf-field-array):not(.rjsf-field-object) > :not(label):not(.control-label) {
     grid-column: 1;
   }
 
-  .rjsf-builder__object:not(.rjsf-builder__object--labels-inline) .field.rjsf-builder__field-label-inline:not(.field-boolean):not(.field-array):not(.field-object) {
+  .rjsf-builder__object:not(.rjsf-builder__object--labels-inline) .form-group.rjsf-field.rjsf-builder__field-label-inline:not(.rjsf-field-boolean):not(.rjsf-field-array):not(.rjsf-field-object) {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .rjsf-builder__object:not(.rjsf-builder__object--labels-inline) .field.rjsf-builder__field-label-inline:not(.field-boolean):not(.field-array):not(.field-object) > :not(label):not(.control-label) {
+  .rjsf-builder__object:not(.rjsf-builder__object--labels-inline) .form-group.rjsf-field.rjsf-builder__field-label-inline:not(.rjsf-field-boolean):not(.rjsf-field-array):not(.rjsf-field-object) > :not(label):not(.control-label) {
     grid-column: 1;
   }
 }
@@ -3339,4 +3462,66 @@
 @keyframes rjsf-toast-in {
   from { opacity: 0; transform: translateY(-6px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+/* ============================================================
+   Container-driven responsiveness (CCA Editor Responsive mockup).
+   The form pane collapses based on ITS OWN width, not the viewport,
+   so layouts adapt when the section rail / side panels eat space.
+   Viewport media queries above remain as a fallback for browsers
+   without container query support.
+   ============================================================ */
+.rjsf-builder__viewer,
+.rjsf-builder__panel--preview,
+.rjsf-builder__panel--preview-full {
+  container-type: inline-size;
+  container-name: fs-formpane;
+}
+
+@container fs-formpane (max-width: 680px) {
+  /* Section column lanes stack */
+  .rjsf-builder__columns {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  /* The 12-col field grids collapse to a single column */
+  .rjsf-builder__grid,
+  .rjsf-builder__column-content {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .rjsf-builder__col {
+    grid-column: auto !important;
+  }
+
+  /* Inline labels fall back to stacked when there is no room */
+  .rjsf-builder__object--labels-inline .form-group.rjsf-field:not(.rjsf-field-boolean):not(.rjsf-field-array):not(.rjsf-field-object),
+  .rjsf-builder__object:not(.rjsf-builder__object--labels-inline) .form-group.rjsf-field.rjsf-builder__field-label-inline:not(.rjsf-field-boolean):not(.rjsf-field-array):not(.rjsf-field-object) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .rjsf-builder__object--labels-inline .form-group.rjsf-field:not(.rjsf-field-boolean):not(.rjsf-field-array):not(.rjsf-field-object) > :not(label):not(.control-label),
+  .rjsf-builder__object:not(.rjsf-builder__object--labels-inline) .form-group.rjsf-field.rjsf-builder__field-label-inline:not(.rjsf-field-boolean):not(.rjsf-field-array):not(.rjsf-field-object) > :not(label):not(.control-label) {
+    grid-column: 1;
+  }
+
+  /* Modern segmented pills stretch full-width when stacked tight */
+  .form-group.rjsf-builder__field--opt-modern .field-radio-group > .radio {
+    flex: 1 1 auto;
+  }
+
+  .form-group.rjsf-builder__field--opt-modern .field-radio-group > .radio > label {
+    text-align: center;
+  }
+}
+
+@container fs-formpane (max-width: 420px) {
+  /* Very narrow (phone / split view): tighten paddings */
+  .rjsf-builder__section {
+    padding: 8px;
+  }
+
+  .rjsf-builder__viewer-section-title {
+    font-size: 13px;
+  }
 }

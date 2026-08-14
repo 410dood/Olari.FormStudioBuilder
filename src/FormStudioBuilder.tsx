@@ -262,6 +262,9 @@ interface FormComponent {
   hideOutputIfEmpty?: boolean;
   hideLabel?: boolean;
   labelLayoutOverride?: LabelLayout;
+  /** "modern": segmented-button radios / boxed checkboxes. "switch": toggle
+   *  rendering for checkbox (absorbs the former "switch" field type). */
+  optionStyle?: "modern" | "switch";
   sectionSwitchEnabled?: boolean;
   multiSelect?: boolean;
   contentText?: string;
@@ -635,7 +638,7 @@ const FIELD_PALETTE_GROUPS: Array<{
   {
     key: "choice",
     label: "Choice",
-    types: ["select", "radio", "yesno", "checkbox", "switch", "matrix"]
+    types: ["select", "radio", "yesno", "checkbox", "matrix"]
   },
   {
     key: "special",
@@ -818,6 +821,7 @@ const DRAG_TYPE_NEW = "application/x-olari-new-field";
 const DRAG_TYPE_LAYOUT = "application/x-olari-new-layout";
 const DRAG_TYPE_SYSTEM = "application/x-olari-new-system-template";
 const DRAG_TYPE_SHARED = "application/x-olari-new-shared-field";
+const DRAG_TYPE_CLIENT = "application/x-olari-new-client-field";
 const DRAG_TYPE_COMPONENT = "application/x-olari-component";
 const DRAG_TYPE_PREVIEW_KEY = "application/x-olari-preview-key";
 const DRAG_TYPE_REPEAT_GROUP_COMPONENT =
@@ -1608,6 +1612,17 @@ interface SharedFieldCatalogEntry {
   sourceCode: string;
   sourceKey: string;
 }
+interface ClientFieldCatalogEntry {
+  tokenKey: string;
+  label: string;
+  fieldType: string;
+  defaultLabel: string;
+}
+// Fallback when the registry row carries no usable FieldType for a client
+// token; checked after entry.fieldType, before the "text" default.
+const CLIENT_TOKEN_FIELD_TYPES: Record<string, FieldType> = {
+  "client.dob": "date"
+};
 // System sections as DATA rows (redesign step 3). The server ships
 // {slotKey: {title?, columns, rows, emptyText?, meta?}} and the widget renders
 // the table itself — every cell goes through escapeHtml, so injection is
@@ -4152,7 +4167,13 @@ function buildFieldClassNames(component: FormComponent): string | undefined {
   if (component.labelLayoutOverride === "block") {
     classes.push("rjsf-builder__field-label-block");
   }
-  if (component.type === "switch") {
+  if (component.optionStyle === "modern") {
+    classes.push("rjsf-builder__field--opt-modern");
+  }
+  if (
+    component.type === "switch" ||
+    (component.type === "checkbox" && component.optionStyle === "switch")
+  ) {
     classes.push("rjsf-builder__field--switch");
   }
   if (component.type === "contentBlock") {
@@ -4534,7 +4555,11 @@ function normalizeVisibility(value: any): VisibilityConfig | undefined {
   return { mode: "all", rules: [legacyRule] };
 }
 function normalizeComponent(item: any, index: number): FormComponent {
-  const type = normalizeFieldType(item?.type);
+  // "switch" merged into "checkbox" (2026-08-14): legacy switch components
+  // become checkboxes with the switch option style.
+  const rawType = normalizeFieldType(item?.type);
+  const isLegacySwitch = rawType === "switch";
+  const type = isLegacySwitch ? "checkbox" : rawType;
   const keySeed = clean(item?.key) || `field_${index + 1}`;
   const key = normalizeKey(keySeed);
   const labelRaw = item?.label == null ? "" : String(item.label);
@@ -4778,6 +4803,12 @@ function normalizeComponent(item: any, index: number): FormComponent {
     labelLayoutOverride: resolveLabelLayoutOverride(
       item?.labelLayoutOverride ?? item?.labelPosition
     ),
+    optionStyle:
+      clean(item?.optionStyle) === "modern"
+        ? "modern"
+        : clean(item?.optionStyle) === "switch" || isLegacySwitch
+        ? "switch"
+        : undefined,
     sectionSwitchEnabled: toBoolean(
       item?.sectionSwitchEnabled ??
         item?.allowSectionToggle ??
@@ -5961,7 +5992,7 @@ function buildUiSchema(definition: FormDefinition): JsonObject {
       fieldUi.items = itemsUi;
       const fieldClassNames = buildFieldClassNames(component);
       if (fieldClassNames) {
-        fieldUi.classNames = fieldClassNames;
+        fieldUi["ui:classNames"] = fieldClassNames;
       }
       if (component.hideLabel) {
         fieldUi["ui:options"] = {
@@ -6022,7 +6053,7 @@ function buildUiSchema(definition: FormDefinition): JsonObject {
     }
     const fieldClassNames = buildFieldClassNames(component);
     if (fieldClassNames) {
-      fieldUi.classNames = fieldClassNames;
+      fieldUi["ui:classNames"] = fieldClassNames;
     }
     if (component.hideLabel) {
       fieldUi["ui:options"] = {
@@ -6094,7 +6125,7 @@ function buildUiSchema(definition: FormDefinition): JsonObject {
       }
       const fieldClassNames = buildFieldClassNames(component);
       if (fieldClassNames) {
-        fieldUi.classNames = fieldClassNames;
+        fieldUi["ui:classNames"] = fieldClassNames;
       }
       if (component.hideLabel) {
         fieldUi["ui:options"] = {
@@ -9583,6 +9614,18 @@ export default function FormStudioBuilder(
         })),
     [tokenCatalog]
   );
+  const clientFieldCatalog = useMemo<ClientFieldCatalogEntry[]>(
+    () =>
+      tokenCatalog
+        .filter((token) => token.kind === "client")
+        .map((token) => ({
+          tokenKey: token.key,
+          label: token.label,
+          fieldType: token.fieldType,
+          defaultLabel: token.defaultLabel
+        })),
+    [tokenCatalog]
+  );
   const extraSystemTemplatesParsed = useMemo(
     () =>
       parseSystemTemplatesConfigJson(
@@ -9656,6 +9699,20 @@ export default function FormStudioBuilder(
           ? ""
           : String(nextDefinition.description);
       writeAttribute(source?.formDescriptionAttr, nextDescriptionValue);
+      // Record what we just wrote so the hydration effect recognizes the
+      // Mendix prop echo as our own write — otherwise it re-hydrates and
+      // clears the undo stack on every edit. Only for attributes that are
+      // actually wired: writeAttribute no-ops on missing ones, so their
+      // echo keeps the previous value.
+      if (source?.formDefinitionAttr) {
+        lastIncomingDefinitionValueRef.current = nextDefinitionJson;
+      }
+      if (source?.formTitleAttr) {
+        lastIncomingTitleValueRef.current = nextTitleValue;
+      }
+      if (source?.formDescriptionAttr) {
+        lastIncomingDescriptionValueRef.current = nextDescriptionValue;
+      }
       if (!triggerChange) {
         const outputArtifacts = buildResolvedOutputArtifacts(
           nextDefinition,
@@ -9675,6 +9732,9 @@ export default function FormStudioBuilder(
         2
       );
       writeAttribute(source?.formDataAttr, nextDataJson);
+      if (source?.formDataAttr) {
+        lastIncomingFormDataValueRef.current = nextDataJson;
+      }
       if (triggerChange) {
         runAction(source?.onChangeAction);
       }
@@ -9708,6 +9768,9 @@ export default function FormStudioBuilder(
         2
       );
       writeAttribute(source?.formDataAttr, nextDataJson);
+      if (source?.formDataAttr) {
+        lastIncomingFormDataValueRef.current = nextDataJson;
+      }
       if (triggerChange) {
         runAction(source?.onChangeAction);
       }
@@ -10812,6 +10875,18 @@ export default function FormStudioBuilder(
       }),
     [sharedFieldCatalog, toolboxFilter]
   );
+  const filteredClientFields = useMemo(
+    () =>
+      clientFieldCatalog.filter((item) => {
+        if (!toolboxFilter) {
+          return true;
+        }
+        const haystack =
+          `${item.label} ${item.tokenKey} ${item.fieldType}`.toLowerCase();
+        return haystack.includes(toolboxFilter);
+      }),
+    [clientFieldCatalog, toolboxFilter]
+  );
   const filteredFieldGroups = useMemo(
     () =>
       FIELD_PALETTE_GROUPS.map((group) => ({
@@ -11397,6 +11472,43 @@ export default function FormStudioBuilder(
               ? { ...YES_NO_OPTION_LABELS }
               : undefined,
           sharedFieldRef: entry.tokenKey
+        };
+        setSelectedId(component.id);
+        setMessage("");
+        return { ...current, components: [...current.components, component] };
+      });
+    },
+    [updateDefinition]
+  );
+  const addClientField = useCallback(
+    (entry: ClientFieldCatalogEntry) => {
+      updateDefinition((current) => {
+        const existing = current.components.find(
+          (component) => clean(component.prefillTokenKey) === entry.tokenKey
+        );
+        if (existing) {
+          setSelectedId(existing.id);
+          setMessage(
+            `"${entry.label}" is already on this form (field key "${existing.key}").`
+          );
+          return current;
+        }
+        const fieldType = FIELD_TYPE_SET.has(entry.fieldType as FieldType)
+          ? (entry.fieldType as FieldType)
+          : CLIENT_TOKEN_FIELD_TYPES[entry.tokenKey] ?? "text";
+        const desiredKey = entry.tokenKey.replace(/[^A-Za-z0-9_]/g, "_");
+        const key = makeUniqueKey(desiredKey, current.components);
+        const component: FormComponent = {
+          id: makeId("cmp"),
+          key,
+          label: entry.defaultLabel || entry.label,
+          type: fieldType,
+          required: false,
+          columnSpan: snapColumnSpan(
+            defaultColumnSpan(fieldType),
+            current.builderOptions?.snapToResize !== false
+          ),
+          prefillTokenKey: entry.tokenKey
         };
         setSelectedId(component.id);
         setMessage("");
@@ -12027,6 +12139,16 @@ export default function FormStudioBuilder(
           return;
         }
       }
+      const clientTokenKey = getDragData(event.dataTransfer, DRAG_TYPE_CLIENT);
+      if (clientTokenKey) {
+        const clientEntry = clientFieldCatalog.find(
+          (item) => item.tokenKey === clientTokenKey
+        );
+        if (clientEntry) {
+          addClientField(clientEntry);
+          return;
+        }
+      }
       const dragId = getDragData(event.dataTransfer, DRAG_TYPE_COMPONENT);
       if (dragId && definition.components.length) {
         reorderComponents(
@@ -12041,6 +12163,8 @@ export default function FormStudioBuilder(
       addSystemTemplate,
       addSharedField,
       sharedFieldCatalog,
+      addClientField,
+      clientFieldCatalog,
       definition.components,
       reorderComponents
     ]
@@ -12978,6 +13102,38 @@ export default function FormStudioBuilder(
                           ))}{" "}
                         </Fragment>
                       ) : null}{" "}
+                      <div className="rjsf-builder__subtitle">Questions</div>{" "}
+                      {filteredFieldGroups.map((group) => (
+                        <div
+                          key={group.key}
+                          className="rjsf-builder__palette-group"
+                        >
+                          {" "}
+                          <div className="rjsf-builder__subtitle">
+                            {" "}
+                            {group.label}{" "}
+                          </div>{" "}
+                          {group.items.map((item) => (
+                            <button
+                              key={item.type}
+                              type="button"
+                              className="rjsf-builder__button"
+                              draggable
+                              onDragStart={(event) =>
+                                setDragData(
+                                  event.dataTransfer,
+                                  DRAG_TYPE_NEW,
+                                  item.type
+                                )
+                              }
+                              onClick={() => addComponent(item.type)}
+                            >
+                              {" "}
+                              + {item.label}{" "}
+                            </button>
+                          ))}{" "}
+                        </div>
+                      ))}{" "}
                       {filteredSystemTemplates.length ? (
                         <Fragment>
                           {" "}
@@ -13044,38 +13200,38 @@ export default function FormStudioBuilder(
                           ))}{" "}
                         </Fragment>
                       ) : null}{" "}
-                      <div className="rjsf-builder__subtitle">Questions</div>{" "}
-                      {filteredFieldGroups.map((group) => (
-                        <div
-                          key={group.key}
-                          className="rjsf-builder__palette-group"
-                        >
+                      {filteredClientFields.length ? (
+                        <Fragment>
                           {" "}
                           <div className="rjsf-builder__subtitle">
                             {" "}
-                            {group.label}{" "}
+                            Client fields{" "}
                           </div>{" "}
-                          {group.items.map((item) => (
+                          {filteredClientFields.map((item) => (
                             <button
-                              key={item.type}
+                              key={item.tokenKey}
                               type="button"
-                              className="rjsf-builder__button"
+                              className="rjsf-builder__button rjsf-builder__button--ghost rjsf-builder__button--shared"
                               draggable
+                              title={`Prefills from client data (${item.tokenKey}) when the form opens; the user can edit the value.`}
                               onDragStart={(event) =>
                                 setDragData(
                                   event.dataTransfer,
-                                  DRAG_TYPE_NEW,
-                                  item.type
+                                  DRAG_TYPE_CLIENT,
+                                  item.tokenKey
                                 )
                               }
-                              onClick={() => addComponent(item.type)}
+                              onClick={() => addClientField(item)}
                             >
                               {" "}
                               + {item.label}{" "}
+                              <span className="rjsf-builder__shared-owner">
+                                prefills from client
+                              </span>{" "}
                             </button>
                           ))}{" "}
-                        </div>
-                      ))}{" "}
+                        </Fragment>
+                      ) : null}{" "}
                       {!filteredLayoutTemplates.length &&
                       !filteredSystemTemplates.length &&
                       !filteredFieldGroups.length ? (
@@ -13495,6 +13651,54 @@ export default function FormStudioBuilder(
                                 </select>{" "}
                               </label>{" "}
                             </div>{" "}
+                            {selectedComponent.type === "radio" ||
+                            selectedComponent.type === "yesno" ||
+                            selectedComponent.type === "checkbox" ? (
+                              <label className="rjsf-builder__field">
+                                {" "}
+                                <span>Option style</span>{" "}
+                                <select
+                                  className="rjsf-builder__select"
+                                  value={
+                                    selectedComponent.optionStyle || "standard"
+                                  }
+                                  onChange={(event) =>
+                                    updateDefinition((current) => ({
+                                      ...current,
+                                      components: current.components.map(
+                                        (component) =>
+                                          component.id === selectedComponent.id
+                                            ? {
+                                                ...component,
+                                                optionStyle:
+                                                  event.target.value ===
+                                                  "modern"
+                                                    ? "modern"
+                                                    : event.target.value ===
+                                                      "switch"
+                                                    ? "switch"
+                                                    : undefined
+                                              }
+                                            : component
+                                      )
+                                    }))
+                                  }
+                                >
+                                  {" "}
+                                  <option value="standard">
+                                    Standard (radios / checkboxes)
+                                  </option>{" "}
+                                  <option value="modern">
+                                    Modern (buttons / boxed)
+                                  </option>{" "}
+                                  {selectedComponent.type === "checkbox" ? (
+                                    <option value="switch">
+                                      Switch (toggle)
+                                    </option>
+                                  ) : null}{" "}
+                                </select>{" "}
+                              </label>
+                            ) : null}{" "}
                           </div>
                         ) : null}{" "}
                         {selectedComponentSharedEntry ? null : (
@@ -13701,7 +13905,9 @@ export default function FormStudioBuilder(
                             }}
                           >
                             {" "}
-                            {FIELD_TYPES.map((item) => (
+                            {FIELD_TYPES.filter(
+                              (item) => item.type !== "switch"
+                            ).map((item) => (
                               <option key={item.type} value={item.type}>
                                 {" "}
                                 {item.label}{" "}
