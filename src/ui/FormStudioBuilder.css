@@ -356,19 +356,6 @@
   outline-offset: 1px;
 }
 
-.rjsf-builder__chip--warning {
-  border-color: #eea24b;
-  color: #9a5a0a;
-  background: #fff8ee;
-  box-shadow: inset 0 0 0 1px rgba(238, 162, 75, 0.18);
-}
-
-.rjsf-builder__chip--interactive.rjsf-builder__chip--warning:hover {
-  border-color: #de8a22;
-  background: #fff1dc;
-  color: #834700;
-}
-
 /* Viewer nav rail (in-section group navigation) */
 .rjsf-builder__panel--viewer-nav {
   position: sticky;
@@ -973,10 +960,6 @@
 
 .rjsf-builder__split--triple {
   grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.rjsf-builder__split--section-meta {
-  grid-template-columns: minmax(0, 1fr);
 }
 
 @media (max-width: 960px) {
@@ -2054,10 +2037,6 @@
   padding: 8px 10px;
   color: #64748b;
   font-style: italic;
-}
-
-.rjsf-builder__content-block-editor {
-  min-height: 120px;
 }
 
 .rjsf-builder__section {
@@ -3484,7 +3463,13 @@
     grid-template-columns: minmax(0, 1fr) !important;
   }
 
-  /* The 12-col field grids collapse to a single column */
+  /* The 12-col field grids collapse to a single column.
+     NOTE on !important in this block: __columns and __col keep it because they
+     fight INLINE styles the renderer writes (gridTemplateColumns on section
+     column lanes, grid-column: span N on cells) — only !important beats inline.
+     __grid/__column-content have no inline styles and stay clean. (2026-08-17:
+     the legacy RjsfFormBuilder bundle briefly forced !important here too via a
+     widgets.css cascade collision; that widget is removed from the app.) */
   .rjsf-builder__grid,
   .rjsf-builder__column-content {
     grid-template-columns: minmax(0, 1fr);
@@ -3519,10 +3504,6 @@
   /* Very narrow (phone / split view): tighten paddings */
   .rjsf-builder__section {
     padding: 8px;
-  }
-
-  .rjsf-builder__viewer-section-title {
-    font-size: 13px;
   }
 }
 
