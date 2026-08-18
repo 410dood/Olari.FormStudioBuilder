@@ -1983,7 +1983,18 @@
   position: relative;
   cursor: pointer;
   flex: 0 0 auto;
+  background-image: none !important;
+  overflow: hidden;
   transition: background 140ms ease, border-color 140ms ease;
+}
+
+/* Kill the legacy bundle's checkmark glyph (drawn via ::after / background
+   image on the same class names) — the pill + knob are the whole control. */
+.rjsf-builder__viewer .form-group.rjsf-builder__field--switch input[type="checkbox"]::after,
+.rjsf-builder__panel--preview .form-group.rjsf-builder__field--switch input[type="checkbox"]::after,
+.rjsf-builder__panel--preview-full .form-group.rjsf-builder__field--switch input[type="checkbox"]::after {
+  content: none !important;
+  display: none !important;
 }
 
 .rjsf-builder__viewer .form-group.rjsf-builder__field--switch .checkbox label,
