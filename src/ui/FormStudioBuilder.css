@@ -1962,90 +1962,87 @@
   background: #60a5fa;
 }
 
-/* Switch field: render the boolean checkbox as a toggle pill */
+/* Switch field: render the boolean checkbox as a toggle pill.
+   !important throughout: the legacy RjsfFormBuilder bundle lands later in the
+   aggregated widgets.css and overrides checkbox geometry/margins. */
 .rjsf-builder__viewer .form-group.rjsf-builder__field--switch input[type="checkbox"],
 .rjsf-builder__panel--preview .form-group.rjsf-builder__field--switch input[type="checkbox"],
 .rjsf-builder__panel--preview-full .form-group.rjsf-builder__field--switch input[type="checkbox"] {
-  width: 36px;
-  min-width: 36px;
-  height: 20px;
-  min-height: 20px;
-  border-radius: 999px;
-  background: #aeb9c9;
-  border: 1px solid #9aa7ba;
-  box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.18);
-  /* !important: the legacy RjsfFormBuilder bundle lands later in the
-     aggregated widgets.css and zeroes checkbox margins. */
-  margin-right: 10px !important;
-  vertical-align: -5px !important;
+  appearance: none;
+  -webkit-appearance: none;
+  width: 40px !important;
+  min-width: 40px !important;
+  height: 22px !important;
+  min-height: 22px !important;
+  border-radius: 999px !important;
+  background: #cbd5e1 !important;
+  border: 1px solid #b6c2d4 !important;
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.12) !important;
+  margin: 0 10px 0 0 !important;
+  vertical-align: middle !important;
+  position: relative;
   cursor: pointer;
+  flex: 0 0 auto;
   transition: background 140ms ease, border-color 140ms ease;
 }
 
-.rjsf-builder__viewer .form-group.rjsf-builder__field--switch label,
-.rjsf-builder__panel--preview .form-group.rjsf-builder__field--switch label,
-.rjsf-builder__panel--preview-full .form-group.rjsf-builder__field--switch label {
+.rjsf-builder__viewer .form-group.rjsf-builder__field--switch .checkbox label,
+.rjsf-builder__panel--preview .form-group.rjsf-builder__field--switch .checkbox label,
+.rjsf-builder__panel--preview-full .form-group.rjsf-builder__field--switch .checkbox label {
   cursor: pointer;
-  display: inline-flex;
+  display: inline-flex !important;
   align-items: center;
-  gap: 2px;
+  gap: 0;
+  font-weight: 500;
+  color: #1f2a3d;
 }
 
 .rjsf-builder__viewer .form-group.rjsf-builder__field--switch input[type="checkbox"]:hover,
 .rjsf-builder__panel--preview .form-group.rjsf-builder__field--switch input[type="checkbox"]:hover,
 .rjsf-builder__panel--preview-full .form-group.rjsf-builder__field--switch input[type="checkbox"]:hover {
-  background: #93a2b8;
-  border-color: #7e8ea6;
+  background: #b3c0d1 !important;
+  border-color: #9dabc0 !important;
 }
 
 .rjsf-builder__viewer .form-group.rjsf-builder__field--switch input[type="checkbox"]:focus-visible,
 .rjsf-builder__panel--preview .form-group.rjsf-builder__field--switch input[type="checkbox"]:focus-visible,
 .rjsf-builder__panel--preview-full .form-group.rjsf-builder__field--switch input[type="checkbox"]:focus-visible {
-  outline: none;
+  outline: none !important;
   box-shadow:
-    inset 0 1px 2px rgba(15, 23, 42, 0.18),
-    0 0 0 3px rgba(75, 115, 194, 0.3);
+    inset 0 1px 2px rgba(15, 23, 42, 0.12),
+    0 0 0 3px rgba(75, 115, 194, 0.3) !important;
 }
 
 .rjsf-builder__viewer .form-group.rjsf-builder__field--switch input[type="checkbox"]::before,
 .rjsf-builder__panel--preview .form-group.rjsf-builder__field--switch input[type="checkbox"]::before,
 .rjsf-builder__panel--preview-full .form-group.rjsf-builder__field--switch input[type="checkbox"]::before {
-  width: 14px;
-  height: 14px;
-  border: none;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.35);
-  transform: translateX(-8px);
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 2px;
+  width: 16px !important;
+  height: 16px !important;
+  border: none !important;
+  border-radius: 50% !important;
+  background: #fff !important;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.4);
+  opacity: 1 !important;
+  transform: translateY(-50%) translateX(0) !important;
   transition: transform 140ms ease;
 }
 
 .rjsf-builder__viewer .form-group.rjsf-builder__field--switch input[type="checkbox"]:checked,
 .rjsf-builder__panel--preview .form-group.rjsf-builder__field--switch input[type="checkbox"]:checked,
 .rjsf-builder__panel--preview-full .form-group.rjsf-builder__field--switch input[type="checkbox"]:checked {
-  border-color: var(--rb-accent);
-  background: var(--rb-accent);
-  box-shadow: none;
+  border-color: var(--rb-accent) !important;
+  background: var(--rb-accent) !important;
+  box-shadow: none !important;
 }
 
 .rjsf-builder__viewer .form-group.rjsf-builder__field--switch input[type="checkbox"]:checked::before,
 .rjsf-builder__panel--preview .form-group.rjsf-builder__field--switch input[type="checkbox"]:checked::before,
 .rjsf-builder__panel--preview-full .form-group.rjsf-builder__field--switch input[type="checkbox"]:checked::before {
-  transform: translateX(8px);
-}
-
-.rjsf-builder--theme-contrast .rjsf-builder__viewer .form-group.rjsf-builder__field--switch input[type="checkbox"],
-.rjsf-builder--theme-contrast .rjsf-builder__panel--preview .form-group.rjsf-builder__field--switch input[type="checkbox"],
-.rjsf-builder--theme-contrast .rjsf-builder__panel--preview-full .form-group.rjsf-builder__field--switch input[type="checkbox"] {
-  background: #475569;
-  border-color: #475569;
-}
-
-.rjsf-builder--theme-contrast .rjsf-builder__viewer .form-group.rjsf-builder__field--switch input[type="checkbox"]:checked,
-.rjsf-builder--theme-contrast .rjsf-builder__panel--preview .form-group.rjsf-builder__field--switch input[type="checkbox"]:checked,
-.rjsf-builder--theme-contrast .rjsf-builder__panel--preview-full .form-group.rjsf-builder__field--switch input[type="checkbox"]:checked {
-  border-color: #60a5fa;
-  background: #60a5fa;
+  transform: translateY(-50%) translateX(18px) !important;
 }
 
 /* Content block: static designer-authored text rendered inside the form */
