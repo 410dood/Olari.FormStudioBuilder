@@ -1966,20 +1966,52 @@
 .rjsf-builder__viewer .form-group.rjsf-builder__field--switch input[type="checkbox"],
 .rjsf-builder__panel--preview .form-group.rjsf-builder__field--switch input[type="checkbox"],
 .rjsf-builder__panel--preview-full .form-group.rjsf-builder__field--switch input[type="checkbox"] {
-  width: 34px;
-  min-width: 34px;
-  height: 18px;
-  min-height: 18px;
+  width: 36px;
+  min-width: 36px;
+  height: 20px;
+  min-height: 20px;
   border-radius: 999px;
-  background: #cbd5e1;
-  border-color: #cbd5e1;
+  background: #aeb9c9;
+  border: 1px solid #9aa7ba;
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.18);
+  /* !important: the legacy RjsfFormBuilder bundle lands later in the
+     aggregated widgets.css and zeroes checkbox margins. */
+  margin-right: 10px !important;
+  vertical-align: -5px !important;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+
+.rjsf-builder__viewer .form-group.rjsf-builder__field--switch label,
+.rjsf-builder__panel--preview .form-group.rjsf-builder__field--switch label,
+.rjsf-builder__panel--preview-full .form-group.rjsf-builder__field--switch label {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.rjsf-builder__viewer .form-group.rjsf-builder__field--switch input[type="checkbox"]:hover,
+.rjsf-builder__panel--preview .form-group.rjsf-builder__field--switch input[type="checkbox"]:hover,
+.rjsf-builder__panel--preview-full .form-group.rjsf-builder__field--switch input[type="checkbox"]:hover {
+  background: #93a2b8;
+  border-color: #7e8ea6;
+}
+
+.rjsf-builder__viewer .form-group.rjsf-builder__field--switch input[type="checkbox"]:focus-visible,
+.rjsf-builder__panel--preview .form-group.rjsf-builder__field--switch input[type="checkbox"]:focus-visible,
+.rjsf-builder__panel--preview-full .form-group.rjsf-builder__field--switch input[type="checkbox"]:focus-visible {
+  outline: none;
+  box-shadow:
+    inset 0 1px 2px rgba(15, 23, 42, 0.18),
+    0 0 0 3px rgba(75, 115, 194, 0.3);
 }
 
 .rjsf-builder__viewer .form-group.rjsf-builder__field--switch input[type="checkbox"]::before,
 .rjsf-builder__panel--preview .form-group.rjsf-builder__field--switch input[type="checkbox"]::before,
 .rjsf-builder__panel--preview-full .form-group.rjsf-builder__field--switch input[type="checkbox"]::before {
-  width: 12px;
-  height: 12px;
+  width: 14px;
+  height: 14px;
   border: none;
   border-radius: 50%;
   background: #fff;
@@ -1993,6 +2025,7 @@
 .rjsf-builder__panel--preview-full .form-group.rjsf-builder__field--switch input[type="checkbox"]:checked {
   border-color: var(--rb-accent);
   background: var(--rb-accent);
+  box-shadow: none;
 }
 
 .rjsf-builder__viewer .form-group.rjsf-builder__field--switch input[type="checkbox"]:checked::before,

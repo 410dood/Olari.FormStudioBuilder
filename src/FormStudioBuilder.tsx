@@ -272,6 +272,13 @@ interface FormComponent {
   optionLabels?: Record<string, string>;
   optionScores?: Record<string, number>;
   matrixRows?: MatrixRowConfig[];
+  /** Matrix-only: a required matrix counts as answered only when EVERY row has
+   *  a value (default: any one row). Serialized alongside matrixRowKeysFlat so
+   *  the server-side required counter can enforce the same rule. */
+  matrixRequireAllRows?: boolean;
+  /** Derived on serialize: pipe-joined row keys, present only when
+   *  matrixRequireAllRows is on. Read by SUB_TemplateFields_Snapshot. */
+  matrixRowKeysFlat?: string;
   datagridColumns?: DataGridColumn[];
   datagridRowIdKey?: string;
   systemTemplateType?: SystemTemplateType;
@@ -280,6 +287,9 @@ interface FormComponent {
   /** Total-only: interpretation bands, e.g. 10-14 -> "Moderate depression".
    *  The matched label is exposed as the {key_band} token. */
   scoreBands?: Array<{ min: number; max: number; label: string }>;
+  /** Total-only: render the total as "n / N" where N is the maximum possible
+   *  score derived from the scored source fields. */
+  showMaxScore?: boolean;
   section?: string;
   /**
    * Stable section identity. Shared by every component in the same section;
@@ -4268,7 +4278,11 @@ function hasOutputValue(component: FormComponent, data: JsonObject): boolean {
       return false;
     }
     const answers = sanitizeMatrixValue(component, data[component.key]) || {};
-    return rows.every((row) => hasPrimitive(answers[row.key]));
+    // Default: any answered row counts (matches the server-side required
+    // counter). "Require every row" is the per-field opt-in.
+    return component.matrixRequireAllRows === true
+      ? rows.every((row) => hasPrimitive(answers[row.key]))
+      : rows.some((row) => hasPrimitive(answers[row.key]));
   }
   if (component.repeatGroup?.key) {
     const rows = Array.isArray(data[component.repeatGroup.key])
@@ -4515,6 +4529,53 @@ function calculateComponentTotal(
     return numericValue == null ? sum : sum + numericValue;
   }, 0);
   return Number.isFinite(total) ? total : 0;
+}
+/** Maximum achievable score for a Calculated total: per source field, the top
+ *  option score (matrix: top score x row count; multi-select: sum of positive
+ *  scores). Unscored numeric sources contribute their configured maximum. */
+function calculateComponentMaxScore(
+  component: FormComponent,
+  components: FormComponent[]
+): number {
+  const sourceKeys = resolveCalculatedSourceKeys(component, components);
+  const componentsByKey = new Map(
+    components.map((candidate) => [candidate.key, candidate])
+  );
+  const max = sourceKeys.reduce((sum, key) => {
+    const source = componentsByKey.get(key);
+    if (!source) {
+      return sum;
+    }
+    const scores = Object.values(source.optionScores || {}).filter(
+      (score) => typeof score === "number" && Number.isFinite(score)
+    ) as number[];
+    if (scores.length) {
+      const top = Math.max(...scores, 0);
+      if (source.type === "matrix") {
+        return sum + top * getMatrixRows(source).length;
+      }
+      if (
+        (source.type === "select" || source.type === "radio") &&
+        source.multiSelect
+      ) {
+        return (
+          sum + scores.filter((score) => score > 0).reduce((a, b) => a + b, 0)
+        );
+      }
+      return sum + top;
+    }
+    if (source.type === "matrix") {
+      // Unscored matrix: option VALUES are the scores (e.g. "0".."3").
+      const numericOptions = (source.options || [])
+        .map((option) => toNumericValue(option))
+        .filter((value): value is number => value != null);
+      const top = numericOptions.length ? Math.max(...numericOptions, 0) : 0;
+      return sum + top * getMatrixRows(source).length;
+    }
+    const numericMax = toNumericValue(source.maximum);
+    return numericMax != null && numericMax > 0 ? sum + numericMax : sum;
+  }, 0);
+  return Number.isFinite(max) ? max : 0;
 }
 function normalizeBuilderOptions(value: any): BuilderOptions {
   const normalizedLabelLayout =
@@ -4887,6 +4948,10 @@ function normalizeComponent(item: any, index: number): FormComponent {
     optionLabels,
     optionScores,
     matrixRows,
+    matrixRequireAllRows:
+      type === "matrix" && toBoolean(item?.matrixRequireAllRows)
+        ? true
+        : undefined,
     datagridColumns,
     datagridRowIdKey,
     systemTemplateSlotProperty,
@@ -4894,6 +4959,8 @@ function normalizeComponent(item: any, index: number): FormComponent {
     sumSources: type === "total" ? sumSources : undefined,
     scoreBands:
       type === "total" ? normalizeScoreBands(item?.scoreBands) : undefined,
+    showMaxScore:
+      type === "total" && toBoolean(item?.showMaxScore) ? true : undefined,
     section: clean(item?.section) || undefined,
     // Stable section identity only makes sense alongside a section.
     sectionId: clean(item?.section)
@@ -5047,9 +5114,37 @@ function ensureSectionIds(definition: FormDefinition): FormDefinition {
   return changed ? { ...definition, components: nextComponents } : definition;
 }
 function serializeDefinitionWithManifest(definition: FormDefinition): string {
+  // matrixRowKeysFlat is derived, not edited: recompute from the current rows
+  // on every save so the server-side snapshot never sees a stale row list.
+  const components = definition.components.map((component) => {
+    if (component.type !== "matrix") {
+      return component;
+    }
+    if (component.matrixRequireAllRows !== true) {
+      return component.matrixRowKeysFlat
+        ? { ...component, matrixRowKeysFlat: undefined }
+        : component;
+    }
+    const flat = getMatrixRows(component)
+      .map((row) => clean(row.key))
+      .filter(Boolean)
+      .join("|");
+    // Key order matters: the server-side snapshot slices each component from
+    // its "key" to the NEXT "key" occurrence, and matrix ROW objects contain
+    // "key" too — so this prop must serialize BEFORE matrixRows or it gets
+    // cut out of the slice.
+    const { matrixRows, matrixRowKeysFlat, ...rest } = component;
+    void matrixRowKeysFlat;
+    return {
+      ...rest,
+      matrixRowKeysFlat: flat || undefined,
+      matrixRows
+    };
+  });
   return JSON.stringify(
     {
       ...definition,
+      components,
       fieldsManifestVersion: FIELDS_MANIFEST_VERSION,
       fieldsManifest: buildFieldsManifest(definition)
     },
@@ -6133,14 +6228,18 @@ function buildUiSchema(definition: FormDefinition): JsonObject {
     if (component.type === "total") {
       fieldUi["ui:readonly"] = true;
       fieldUi["ui:disabled"] = true;
-      if (component.scoreBands?.length) {
+      if (component.scoreBands?.length || component.showMaxScore) {
         fieldUi["ui:widget"] = "scoreTotal";
       }
       fieldUi["ui:options"] = {
         ...(fieldUi["ui:options"] || {}),
         calculation: "sum",
         sourceKeys: component.sumSources || undefined,
-        scoreBands: component.scoreBands || undefined
+        scoreBands: component.scoreBands || undefined,
+        showMaxScore: component.showMaxScore || undefined,
+        maxScore: component.showMaxScore
+          ? calculateComponentMaxScore(component, definition.components)
+          : undefined
       };
     }
     uiSchema[component.key] = fieldUi;
@@ -6702,6 +6801,8 @@ function ScoreTotalWidget(props: any): ReactElement {
   const bands = normalizeScoreBands(props.options?.scoreBands);
   const numeric = toNumericValue(props.value) ?? 0;
   const bandLabel = resolveScoreBandLabel(bands, numeric);
+  const maxScore = toNumericValue(props.options?.maxScore);
+  const showMax = Boolean(props.options?.showMaxScore) && maxScore != null;
   return (
     <div className="rjsf-builder__score-total">
       <input
@@ -6710,7 +6811,11 @@ function ScoreTotalWidget(props: any): ReactElement {
         type="text"
         readOnly
         disabled
-        value={String(props.value ?? 0)}
+        value={
+          showMax
+            ? `${props.value ?? 0} / ${maxScore}`
+            : String(props.value ?? 0)
+        }
       />
       {bandLabel ? (
         <span
@@ -14895,6 +15000,39 @@ export default function FormStudioBuilder(
                               columns above. Answers are stored per row key.
                               Leave key blank to derive it from the label.{" "}
                             </div>{" "}
+                            <label className="rjsf-builder__toggle">
+                              {" "}
+                              <input
+                                type="checkbox"
+                                checked={
+                                  selectedComponent.matrixRequireAllRows ===
+                                  true
+                                }
+                                onChange={(event) =>
+                                  updateDefinition((current) => ({
+                                    ...current,
+                                    components: current.components.map(
+                                      (component) =>
+                                        component.id === selectedComponent.id
+                                          ? {
+                                              ...component,
+                                              matrixRequireAllRows: event
+                                                .target.checked
+                                                ? true
+                                                : undefined
+                                            }
+                                          : component
+                                    )
+                                  }))
+                                }
+                              />{" "}
+                              <span>Require every row answered</span>{" "}
+                            </label>{" "}
+                            <div className="rjsf-builder__help">
+                              {" "}
+                              When on, a required matrix only counts as
+                              complete once every row has an answer.{" "}
+                            </div>{" "}
                           </div>
                         ) : null}{" "}
                         {selectedComponent.type === "yesno" ? (
@@ -16385,6 +16523,35 @@ export default function FormStudioBuilder(
                           Leave blank to auto-sum all
                           number/integer/radio/dropdown fields.{" "}
                         </div>{" "}
+                        <label className="rjsf-builder__toggle">
+                          {" "}
+                          <input
+                            type="checkbox"
+                            checked={
+                              selectedComponent.showMaxScore === true
+                            }
+                            onChange={(event) =>
+                              updateDefinition((current) => ({
+                                ...current,
+                                components: current.components.map(
+                                  (component) =>
+                                    component.id === selectedComponent.id
+                                      ? {
+                                          ...component,
+                                          showMaxScore: event.target.checked
+                                            ? true
+                                            : undefined
+                                        }
+                                      : component
+                                )
+                              }))
+                            }
+                          />{" "}
+                          <span>
+                            Show max possible score (e.g. &ldquo;7 /
+                            21&rdquo;)
+                          </span>{" "}
+                        </label>{" "}
                         <div className="rjsf-builder__help">
                           {" "}
                           Available keys:{" "}
