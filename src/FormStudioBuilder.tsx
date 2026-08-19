@@ -13052,6 +13052,31 @@ export default function FormStudioBuilder(
       </div>
     );
   }
+  // Expression-typed display settings resolve a frame or more after the
+  // datasource attrs on a cold load; resolveBooleanSetting falls back to its
+  // default during those frames, so a PDF page (showDocumentPreview=true via
+  // expression) briefly renders the interactive viewer — wizard nav, progress
+  // bar — and the document-generation capture can land on that frame. Hold
+  // back the viewer until every wired expression setting has resolved.
+  const displaySettingsResolving = [
+    props.showPalettePanel,
+    props.showComponentsPanel,
+    props.showSectionPanel,
+    props.showPropertiesPanel,
+    props.showPreviewPanel,
+    props.showLayoutTools,
+    props.showViewerHeader,
+    props.showDocumentPreview,
+    props.formLiveValidate
+  ].some(
+    (setting) =>
+      setting != null &&
+      typeof setting !== "boolean" &&
+      normalizeStatus((setting as any).status) === "loading"
+  );
+  if (isViewer && displaySettingsResolving) {
+    return <div className={className} style={props.style} />;
+  }
   return (
     <div className={className} style={props.style} tabIndex={props.tabIndex}>
       <WidgetToasts attr={props.toastMessageAttr} />
