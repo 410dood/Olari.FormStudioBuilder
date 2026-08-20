@@ -3006,6 +3006,63 @@
   border-bottom: 1px solid #e3eaf5;
 }
 
+/* Table display: one shared header row of column labels, compact label-less
+   rows with an icon toolbar. Header and rows mirror the same bootstrap row
+   markup so their columns align. */
+.rjsf-builder__array-field--table .rjsf-builder__array-list {
+  gap: 6px;
+}
+
+.rjsf-builder__array-table-head {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 0 7px;
+}
+
+.rjsf-builder__array-table-head-row {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.rjsf-builder__array-table-head-cell {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--rb-muted);
+  letter-spacing: 0.02em;
+}
+
+.rjsf-builder__array-table-head-actions {
+  flex: 0 0 92px;
+}
+
+.rjsf-builder__array-item--table {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 7px;
+}
+
+.rjsf-builder__array-item-table-content {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.rjsf-builder__array-item-table-toolbar {
+  flex: 0 0 92px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  padding-top: 4px;
+}
+
+/* Column labels live in the shared header; hide them inside each row.
+   !important outranks the datagrid-row stacked-label rules above. */
+.rjsf-builder__array-field--table .rjsf-builder__datagrid-row .form-group.rjsf-field > label,
+.rjsf-builder__array-field--table .rjsf-builder__datagrid-row .form-group.rjsf-field > .control-label {
+  display: none !important;
+}
+
 .rjsf-builder__array-item-title {
   font-size: 12px;
   font-weight: 700;

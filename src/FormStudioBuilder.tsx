@@ -293,6 +293,9 @@ interface FormComponent {
   matrixRowKeysFlat?: string;
   datagridColumns?: DataGridColumn[];
   datagridRowIdKey?: string;
+  /** Datagrid: "table" renders one shared header row of column labels with
+   *  compact label-less rows; undefined keeps the stacked per-row labels. */
+  datagridDisplay?: "table";
   systemTemplateType?: SystemTemplateType;
   systemTemplateSlotProperty?: SystemTemplateSlotProperty;
   /** Date/datetime: which part of the date is captured (default "full").
@@ -5126,6 +5129,10 @@ function normalizeComponent(item: any, index: number): FormComponent {
         : undefined,
     datagridColumns,
     datagridRowIdKey,
+    datagridDisplay:
+      type === "datagrid" && clean(item?.datagridDisplay) === "table"
+        ? "table"
+        : undefined,
     systemTemplateSlotProperty,
     systemTemplateType,
     dateGranularity,
@@ -6324,6 +6331,14 @@ function buildUiSchema(definition: FormDefinition): JsonObject {
       }
       itemsUi["ui:field"] = "LayoutGridField";
       itemsUi["ui:layoutGrid"] = buildDataGridColumnsLayoutGrid(columns);
+      if (component.datagridDisplay === "table") {
+        // ArrayFieldItemTemplate reads the ITEM uiSchema, not the array's —
+        // mirror the display mode there so rows render the compact branch.
+        itemsUi["ui:options"] = {
+          ...((itemsUi["ui:options"] as JsonObject) || {}),
+          arrayDisplay: "table"
+        };
+      }
       fieldUi["ui:options"] = {
         ...(fieldUi["ui:options"] || {}),
         addable: true,
@@ -6331,7 +6346,22 @@ function buildUiSchema(definition: FormDefinition): JsonObject {
         orderable: true,
         arrayStyle: "datagrid",
         arrayItemLabel: "Row",
-        arrayAddLabel: "Add row"
+        arrayAddLabel: "Add row",
+        arrayDisplay:
+          component.datagridDisplay === "table" ? "table" : undefined,
+        datagridHeaderColumns:
+          component.datagridDisplay === "table"
+            ? columns.map((column) => ({
+                key: column.key,
+                label: column.label || column.key,
+                required: column.required === true,
+                span: clamp(
+                  column.columnSpan || defaultColumnSpan(column.type),
+                  1,
+                  12
+                )
+              }))
+            : undefined
       };
       fieldUi.items = itemsUi;
       const fieldClassNames = buildFieldClassNames(component);
@@ -7458,9 +7488,23 @@ function ArrayFieldTemplate(props: any): ReactElement {
   const titleText = clean(uiOptions.title) || clean(title);
   const description = uiOptions.description ?? schema?.description;
   const addLabel = clean(uiOptions.arrayAddLabel) || "Add row";
+  const isTableDisplay =
+    clean(uiOptions.arrayDisplay) === "table" &&
+    Array.isArray(uiOptions.datagridHeaderColumns) &&
+    (uiOptions.datagridHeaderColumns as JsonObject[]).length > 0;
+  const headerColumns = isTableDisplay
+    ? (uiOptions.datagridHeaderColumns as Array<{
+        key: string;
+        label: string;
+        required?: boolean;
+        span: number;
+      }>)
+    : [];
   return (
     <fieldset
-      className={`${className || ""} rjsf-builder__array-field`}
+      className={`${className || ""} rjsf-builder__array-field${
+        isTableDisplay ? " rjsf-builder__array-field--table" : ""
+      }`}
       id={fieldPathId?.$id}
     >
       {" "}
@@ -7492,6 +7536,27 @@ function ArrayFieldTemplate(props: any): ReactElement {
             {str(description)}
           </div>
         )
+      ) : null}{" "}
+      {isTableDisplay && (items?.length || 0) > 0 ? (
+        <div className="rjsf-builder__array-table-head">
+          {" "}
+          <div className="row rjsf-builder__datagrid-row rjsf-builder__array-table-head-row">
+            {" "}
+            {headerColumns.map((column) => (
+              <div
+                key={`head-${column.key}`}
+                className={`col-xs-12 col-sm-${column.span} rjsf-builder__array-table-head-cell`}
+              >
+                {" "}
+                {column.label}
+                {column.required ? (
+                  <span className="rjsf-builder__array-title-required">*</span>
+                ) : null}{" "}
+              </div>
+            ))}{" "}
+          </div>{" "}
+          <div className="rjsf-builder__array-table-head-actions" />{" "}
+        </div>
       ) : null}{" "}
       <div className="rjsf-builder__array-list">{items}</div>{" "}
       {canAdd ? (
@@ -7533,6 +7598,82 @@ function ArrayFieldItemTemplate(props: any): ReactElement {
   const itemLabelBase =
     clean(parentOptions.arrayItemLabel) ||
     (clean(parentOptions.arrayStyle) === "repeat-group" ? "Entry" : "Row");
+  const ownUiSchema = (props as JsonObject)?.uiSchema;
+  const ownOptions =
+    ownUiSchema &&
+    typeof ownUiSchema === "object" &&
+    !Array.isArray(ownUiSchema) &&
+    (ownUiSchema as JsonObject)["ui:options"] &&
+    typeof (ownUiSchema as JsonObject)["ui:options"] === "object"
+      ? ((ownUiSchema as JsonObject)["ui:options"] as JsonObject)
+      : {};
+  if (
+    clean(parentOptions.arrayDisplay) === "table" ||
+    clean(ownOptions.arrayDisplay) === "table"
+  ) {
+    // Table display: no per-row header — the array renders one shared header
+    // of column labels; rows are compact with an icon toolbar on the right.
+    return (
+      <div
+        className={`${className || ""} rjsf-builder__array-item rjsf-builder__array-item--table`}
+        data-array-item-key={itemKey}
+      >
+        {" "}
+        <div className="rjsf-builder__array-item-table-content">
+          {children}
+        </div>{" "}
+        {hasToolbar ? (
+          <div className="rjsf-builder__array-item-table-toolbar">
+            {" "}
+            {(buttonsProps?.hasMoveUp || buttonsProps?.hasMoveDown) && (
+              <Fragment>
+                {" "}
+                <button
+                  type="button"
+                  className="rjsf-builder__col-action"
+                  title={`Move ${itemLabelBase.toLowerCase()} ${index + 1} up`}
+                  onClick={buttonsProps?.onMoveUpItem}
+                  disabled={
+                    buttonsProps?.disabled ||
+                    buttonsProps?.readonly ||
+                    !buttonsProps?.hasMoveUp
+                  }
+                >
+                  ↑
+                </button>{" "}
+                <button
+                  type="button"
+                  className="rjsf-builder__col-action"
+                  title={`Move ${itemLabelBase.toLowerCase()} ${
+                    index + 1
+                  } down`}
+                  onClick={buttonsProps?.onMoveDownItem}
+                  disabled={
+                    buttonsProps?.disabled ||
+                    buttonsProps?.readonly ||
+                    !buttonsProps?.hasMoveDown
+                  }
+                >
+                  ↓
+                </button>{" "}
+              </Fragment>
+            )}{" "}
+            {buttonsProps?.hasRemove ? (
+              <button
+                type="button"
+                className="rjsf-builder__col-action rjsf-builder__col-action--danger"
+                title={`Remove ${itemLabelBase.toLowerCase()} ${index + 1}`}
+                onClick={buttonsProps?.onRemoveItem}
+                disabled={buttonsProps?.disabled || buttonsProps?.readonly}
+              >
+                ✕
+              </button>
+            ) : null}{" "}
+          </div>
+        ) : null}{" "}
+      </div>
+    );
+  }
   return (
     <div
       className={`${className || ""} rjsf-builder__array-item`}
@@ -15007,6 +15148,10 @@ export default function FormStudioBuilder(
                                       datagridRowIdKey: isDataGridType
                                         ? component.datagridRowIdKey
                                         : undefined,
+                                      datagridDisplay:
+                                        nextType === "datagrid"
+                                          ? component.datagridDisplay
+                                          : undefined,
                                       multiSelect: nextMultiSelect,
                                       dateGranularity:
                                         nextType === "date"
@@ -15753,6 +15898,48 @@ export default function FormStudioBuilder(
                               {" "}
                               Open datagrid settings{" "}
                             </button>{" "}
+                            <label className="rjsf-builder__field">
+                              {" "}
+                              <span>Display</span>{" "}
+                              <select
+                                className="rjsf-builder__select"
+                                value={
+                                  selectedComponent.datagridDisplay === "table"
+                                    ? "table"
+                                    : "stacked"
+                                }
+                                onChange={(event) => {
+                                  const nextDisplay =
+                                    event.target.value === "table"
+                                      ? ("table" as const)
+                                      : undefined;
+                                  updateDefinition((current) => ({
+                                    ...current,
+                                    components: current.components.map(
+                                      (component) =>
+                                        component.id === selectedComponent.id
+                                          ? {
+                                              ...component,
+                                              datagridDisplay: nextDisplay
+                                            }
+                                          : component
+                                    )
+                                  }));
+                                }}
+                              >
+                                <option value="stacked">
+                                  Stacked rows (labels in each row)
+                                </option>
+                                <option value="table">
+                                  Table (single header row)
+                                </option>
+                              </select>{" "}
+                            </label>{" "}
+                            <div className="rjsf-builder__help">
+                              {" "}
+                              Table works best when column widths total 12 so
+                              each entry fits on one line.{" "}
+                            </div>{" "}
                           </div>
                         ) : null}{" "}
                         {selectedComponent.type === "contentBlock" ? (
