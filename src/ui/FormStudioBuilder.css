@@ -1704,6 +1704,20 @@
   grid-column: 1;
 }
 
+/* Datagrid rows: the bootstrap columns are far too narrow for the inline
+   label grid (a 220px label track leaves a ~20px input in a col-sm-3), so
+   row fields ALWAYS stack label over input regardless of the form's Label
+   layout setting. */
+.rjsf-builder .rjsf-builder__datagrid-row .form-group.rjsf-field {
+  display: block !important;
+}
+
+.rjsf-builder .rjsf-builder__datagrid-row .form-group.rjsf-field > label,
+.rjsf-builder .rjsf-builder__datagrid-row .form-group.rjsf-field > .control-label {
+  display: block;
+  margin: 0 0 4px;
+}
+
 /* Standard radios: keep the bubble vertically centered on its text. The
    legacy RjsfFormBuilder bundle's `.rjsf-builder input { width: 100% }`
    also hits radio inputs in the aggregate widgets.css, which skews the
