@@ -372,6 +372,9 @@ interface BuilderOptions {
   snapToGrid: boolean;
   snapToResize: boolean;
   labelLayout: LabelLayout;
+  /** Inline-label column width in twelfths of the field row (2–6).
+   *  Undefined keeps the built-in 220px cap (≈ Mendix's default col-3). */
+  labelWidth?: number;
   showLayoutSection: boolean;
   /** "wizard" fills one section per page with gated Next; "scroll" is the
    *  classic continuous form. */
@@ -4215,6 +4218,15 @@ function buildFieldClassNames(component: FormComponent): string | undefined {
     classes.push("rjsf-builder__field--opt-modern");
   }
   if (
+    (component.type === "radio" || component.type === "select") &&
+    component.multiSelect
+  ) {
+    /* Multi-select renders as an array field (checkboxes widget); this marker
+       lets the label-layout CSS treat it like any other choice field instead
+       of excluding it with datagrids/repeat groups. */
+    classes.push("rjsf-builder__field--choice-multi");
+  }
+  if (
     component.type === "switch" ||
     (component.type === "checkbox" && component.optionStyle === "switch")
   ) {
@@ -4584,6 +4596,12 @@ function normalizeBuilderOptions(value: any): BuilderOptions {
     snapToGrid: value?.snapToGrid !== false,
     snapToResize: value?.snapToResize !== false,
     labelLayout: normalizedLabelLayout,
+    labelWidth: (() => {
+      const parsed = Math.round(Number(value?.labelWidth));
+      return Number.isFinite(parsed) && parsed >= 2 && parsed <= 6
+        ? parsed
+        : undefined;
+    })(),
     showLayoutSection: value?.showLayoutSection !== false,
     fillMode: clean(value?.fillMode).toLowerCase() === "wizard" ? "wizard" : "scroll"
   };
@@ -9064,15 +9082,50 @@ const RichTemplateEditor = forwardRef<
     }
     lastEmittedRef.current = value;
   }, [value]);
+  const debounceTimerRef = useRef<number | null>(null);
+  const dirtyRef = useRef(false);
   const emit = useCallback(() => {
+    if (debounceTimerRef.current !== null) {
+      window.clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
     const editor = editorRef.current;
     if (!editor) {
       return;
     }
+    dirtyRef.current = false;
     const next = editorHtmlToTemplateValue(editor.innerHTML);
+    if (next === lastEmittedRef.current) {
+      return;
+    }
     lastEmittedRef.current = next;
     onChange(next);
   }, [onChange]);
+  /* Committing serializes and persists the whole definition (plus one undo
+     snapshot), so typing commits on a pause instead of per keystroke.
+     Toolbar actions and blur flush immediately. */
+  const scheduleEmit = useCallback(() => {
+    dirtyRef.current = true;
+    if (debounceTimerRef.current !== null) {
+      window.clearTimeout(debounceTimerRef.current);
+    }
+    debounceTimerRef.current = window.setTimeout(() => {
+      debounceTimerRef.current = null;
+      emit();
+    }, 600);
+  }, [emit]);
+  useEffect(
+    () => () => {
+      if (debounceTimerRef.current !== null) {
+        window.clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
+      if (dirtyRef.current) {
+        emit();
+      }
+    },
+    [emit]
+  );
   const saveSelection = useCallback(() => {
     const editor = editorRef.current;
     const selection = window.getSelection();
@@ -9169,7 +9222,7 @@ const RichTemplateEditor = forwardRef<
         aria-multiline="true"
         aria-label={ariaLabel}
         data-placeholder={placeholder || ""}
-        onInput={emit}
+        onInput={scheduleEmit}
         onBlur={() => {
           saveSelection();
           emit();
@@ -13077,8 +13130,15 @@ export default function FormStudioBuilder(
   if (isViewer && displaySettingsResolving) {
     return <div className={className} style={props.style} />;
   }
+  const labelWidthTwelfths = definition.builderOptions?.labelWidth;
+  const rootStyle: CSSProperties | undefined = labelWidthTwelfths
+    ? ({
+        ...props.style,
+        "--rb-label-col": `${((labelWidthTwelfths / 12) * 100).toFixed(3)}%`
+      } as CSSProperties)
+    : props.style;
   return (
-    <div className={className} style={props.style} tabIndex={props.tabIndex}>
+    <div className={className} style={rootStyle} tabIndex={props.tabIndex}>
       <WidgetToasts attr={props.toastMessageAttr} />
       {" "}
       {!isViewer || showViewerHeader ? (
@@ -13175,6 +13235,34 @@ export default function FormStudioBuilder(
                         {option.label}{" "}
                       </option>
                     ))}{" "}
+                  </select>{" "}
+                </label>{" "}
+                <label className="rjsf-builder__toolbar-field rjsf-builder__toolbar-field--compact">
+                  {" "}
+                  <span>Label width</span>{" "}
+                  <select
+                    className="rjsf-builder__select rjsf-builder__select--compact"
+                    value={String(
+                      definition.builderOptions?.labelWidth ?? ""
+                    )}
+                    onChange={(event) => {
+                      const parsed = Math.round(Number(event.target.value));
+                      updateBuilderOptions((options) => ({
+                        ...options,
+                        labelWidth:
+                          Number.isFinite(parsed) && parsed >= 2 && parsed <= 6
+                            ? parsed
+                            : undefined
+                      }));
+                    }}
+                  >
+                    {" "}
+                    <option value="">Default (fixed)</option>{" "}
+                    <option value="2">2 / 12 (narrow)</option>{" "}
+                    <option value="3">3 / 12</option>{" "}
+                    <option value="4">4 / 12</option>{" "}
+                    <option value="5">5 / 12</option>{" "}
+                    <option value="6">6 / 12 (half)</option>{" "}
                   </select>{" "}
                 </label>{" "}
                 <label className="rjsf-builder__toolbar-field rjsf-builder__toolbar-field--compact">
@@ -15215,7 +15303,7 @@ export default function FormStudioBuilder(
                         {selectedComponent.type === "contentBlock" ? (
                           <div className="rjsf-builder__block">
                             {" "}
-                            <label className="rjsf-builder__field">
+                            <div className="rjsf-builder__field">
                               {" "}
                               <span>Content</span>{" "}
                               <RichTemplateEditor
@@ -15237,7 +15325,7 @@ export default function FormStudioBuilder(
                                   }))
                                 }
                               />{" "}
-                            </label>{" "}
+                            </div>{" "}
                             <div className="rjsf-builder__help">
                               {" "}
                               Static text rendered in the form. Tokens like{" "}
@@ -15449,7 +15537,11 @@ export default function FormStudioBuilder(
                               </div>
                             )}{" "}
                           </div>{" "}
-                          <label className="rjsf-builder__field">
+                          {/* div, not label: a label forwards clicks on the
+                              contentEditable editor to its first labelable
+                              control — the Reset to Default button — wiping
+                              the user's edits on every click into the box. */}
+                          <div className="rjsf-builder__field">
                             {" "}
                             <span className="rjsf-builder__field-label-row">
                               {" "}
@@ -15501,7 +15593,7 @@ export default function FormStudioBuilder(
                                 }))
                               }
                             />{" "}
-                          </label>{" "}
+                          </div>{" "}
                           <label className="rjsf-builder__toggle">
                             {" "}
                             <input
@@ -16511,43 +16603,124 @@ export default function FormStudioBuilder(
                         <div className="rjsf-builder__group-body">
                       <div className="rjsf-builder__block">
                         {" "}
-                        <label className="rjsf-builder__field">
-                          {" "}
-                          <span>Sum source keys (one per line)</span>{" "}
-                          <textarea
-                            className="rjsf-builder__input rjsf-builder__input--multiline"
-                            value={(selectedComponent.sumSources || []).join(
-                              "\n"
-                            )}
-                            onChange={(event) =>
-                              updateDefinition((current) => ({
-                                ...current,
-                                components: current.components.map(
-                                  (component) =>
-                                    component.id === selectedComponent.id
-                                      ? {
-                                          ...component,
-                                          sumSources: (() => {
-                                            const items = event.target.value
-                                              .split(/\r?\n|,/)
-                                              .map((item) => clean(item))
-                                              .filter(Boolean);
-                                            return items.length
-                                              ? Array.from(new Set(items))
-                                              : undefined;
-                                          })()
-                                        }
-                                      : component
-                                )
-                              }))
-                            }
-                          />{" "}
-                        </label>{" "}
+                        <div className="rjsf-builder__subtitle">
+                          Fields to sum
+                        </div>{" "}
                         <div className="rjsf-builder__help">
                           {" "}
-                          Leave blank to auto-sum all
-                          number/integer/radio/dropdown fields.{" "}
+                          {selectedComponent.sumSources?.length
+                            ? `Summing ${selectedComponent.sumSources.length} selected field${
+                                selectedComponent.sumSources.length === 1
+                                  ? ""
+                                  : "s"
+                              }.`
+                            : "Auto: summing every number/integer/radio/dropdown field."}{" "}
                         </div>{" "}
+                        {(() => {
+                          const setSumSources = (
+                            next: string[] | undefined
+                          ) =>
+                            updateDefinition((current) => ({
+                              ...current,
+                              components: current.components.map(
+                                (component) =>
+                                  component.id === selectedComponent.id
+                                    ? {
+                                        ...component,
+                                        sumSources:
+                                          next && next.length
+                                            ? Array.from(new Set(next))
+                                            : undefined
+                                      }
+                                    : component
+                              )
+                            }));
+                          const selected =
+                            selectedComponent.sumSources || [];
+                          const knownKeys = totalSourceCandidates.map(
+                            (candidate) => candidate.key
+                          );
+                          const orphanKeys = selected.filter(
+                            (key) => !knownKeys.includes(key)
+                          );
+                          return (
+                            <div className="rjsf-builder__sum-picker">
+                              <div className="rjsf-builder__sum-picker-head">
+                                <button
+                                  type="button"
+                                  className="rjsf-builder__button rjsf-builder__button--ghost"
+                                  onClick={() => setSumSources(knownKeys)}
+                                >
+                                  Select all
+                                </button>
+                                <button
+                                  type="button"
+                                  className="rjsf-builder__button rjsf-builder__button--ghost"
+                                  onClick={() => setSumSources(undefined)}
+                                >
+                                  Clear (auto)
+                                </button>
+                              </div>
+                              <div className="rjsf-builder__sum-picker-list">
+                                {totalSourceCandidates.map((candidate) => (
+                                  <label
+                                    key={`sum-${selectedComponent.id}-${candidate.key}`}
+                                    className="rjsf-builder__toggle rjsf-builder__sum-picker-item"
+                                    title={candidate.key}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={selected.includes(
+                                        candidate.key
+                                      )}
+                                      onChange={(event) =>
+                                        setSumSources(
+                                          event.target.checked
+                                            ? [...selected, candidate.key]
+                                            : selected.filter(
+                                                (key) =>
+                                                  key !== candidate.key
+                                              )
+                                        )
+                                      }
+                                    />
+                                    <span className="rjsf-builder__sum-picker-text">
+                                      {candidate.label || candidate.key}
+                                    </span>
+                                  </label>
+                                ))}
+                                {orphanKeys.map((key) => (
+                                  <label
+                                    key={`sum-orphan-${selectedComponent.id}-${key}`}
+                                    className="rjsf-builder__toggle rjsf-builder__sum-picker-item rjsf-builder__sum-picker-item--orphan"
+                                    title="This key no longer matches a summable field on the form"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked
+                                      onChange={() =>
+                                        setSumSources(
+                                          selected.filter(
+                                            (item) => item !== key
+                                          )
+                                        )
+                                      }
+                                    />
+                                    <span className="rjsf-builder__sum-picker-text">
+                                      {key} (missing)
+                                    </span>
+                                  </label>
+                                ))}
+                                {!totalSourceCandidates.length &&
+                                !orphanKeys.length ? (
+                                  <div className="rjsf-builder__help">
+                                    No summable fields on this form yet.
+                                  </div>
+                                ) : null}
+                              </div>
+                            </div>
+                          );
+                        })()}{" "}
                         <label className="rjsf-builder__toggle">
                           {" "}
                           <input
@@ -16577,15 +16750,6 @@ export default function FormStudioBuilder(
                             21&rdquo;)
                           </span>{" "}
                         </label>{" "}
-                        <div className="rjsf-builder__help">
-                          {" "}
-                          Available keys:{" "}
-                          {totalSourceCandidates.length
-                            ? totalSourceCandidates
-                                .map((component) => component.key)
-                                .join(", ")
-                            : "none"}{" "}
-                        </div>{" "}
                         <div className="rjsf-builder__subtitle rjsf-builder__subtitle--spaced">
                           Score interpretation
                         </div>{" "}
