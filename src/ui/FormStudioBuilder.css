@@ -3764,6 +3764,30 @@
   color: #b3261e;
 }
 
+/* Combined date + time capture: two native inputs sharing one row. The date
+   half gets the wider track; both clamp inside narrow columns. */
+.rjsf-builder__datetime {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.rjsf-builder__datetime-date {
+  flex: 3 1 130px;
+  min-width: 0;
+}
+
+.rjsf-builder__datetime-time {
+  flex: 2 1 90px;
+  min-width: 0;
+}
+
+/* Partial-date inputs (month select, year/day number) size like normal
+   controls instead of stretching oddly. */
+.rjsf-builder__temporal-number {
+  max-width: 140px;
+}
+
 /* Sum-source picker (total fields): checkbox list replaces the old
    keys-one-per-line textarea. */
 .rjsf-builder__sum-picker {

@@ -54,6 +54,7 @@ type FieldType =
   | "yesno"
   | "switch"
   | "time"
+  | "datetime"
   | "contentBlock"
   | "datagrid"
   | "systemDatagrid2"
@@ -63,8 +64,19 @@ type FieldType =
   | "slider";
 type DataGridColumnType = Exclude<
   FieldType,
-  "datagrid" | "signature" | "total" | "contentBlock" | "matrix" | "slider"
+  | "datagrid"
+  | "signature"
+  | "total"
+  | "contentBlock"
+  | "matrix"
+  | "slider"
+  | "datetime"
 >;
+/** Date fields: which part of a date the field captures. */
+type DateGranularity = "full" | "monthYear" | "month" | "year" | "day";
+/** Date fields: how the captured date prints in narratives/documents. */
+type DateDisplayFormat = "numeric" | "long" | "iso";
+type TimeDisplayFormat = "12h" | "24h";
 type LayoutTemplateType = "layout_section" | "layout_datagrid_compact";
 type SystemTemplateType =
   | "active_medications"
@@ -283,6 +295,15 @@ interface FormComponent {
   datagridRowIdKey?: string;
   systemTemplateType?: SystemTemplateType;
   systemTemplateSlotProperty?: SystemTemplateSlotProperty;
+  /** Date/datetime: which part of the date is captured (default "full").
+   *  Values store as: full "YYYY-MM-DD", monthYear "YYYY-MM", month "MM",
+   *  year "YYYY", day "DD"; datetime always full, "YYYY-MM-DD HH:mm". */
+  dateGranularity?: DateGranularity;
+  /** Date/datetime: narrative/print format (default "numeric", e.g. 8/20/2026;
+   *  "long" = August 20, 2026; "iso" = 2026-08-20). */
+  dateDisplayFormat?: DateDisplayFormat;
+  /** Time/datetime: narrative/print format (default "12h"). */
+  timeDisplayFormat?: TimeDisplayFormat;
   sumSources?: string[];
   /** Total-only: interpretation bands, e.g. 10-14 -> "Moderate depression".
    *  The matched label is exposed as the {key_band} token. */
@@ -413,6 +434,7 @@ const FIELD_TYPES: Array<{ type: FieldType; label: string }> = [
   { type: "yesno", label: "Yes/No" },
   { type: "switch", label: "Switch" },
   { type: "time", label: "Time" },
+  { type: "datetime", label: "Date & time" },
   { type: "contentBlock", label: "Content Block" },
   { type: "datagrid", label: "Datagrid" },
   { type: "systemDatagrid2", label: "System Template" },
@@ -652,6 +674,7 @@ const FIELD_PALETTE_GROUPS: Array<{
       "slider",
       "date",
       "time",
+      "datetime",
       "email"
     ]
   },
@@ -1861,6 +1884,21 @@ function coerceTokenPrefillValue(
       }
       return `${String(hours).padStart(2, "0")}:${meridiem[2]}`;
     }
+    case "datetime": {
+      const direct = value.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})/);
+      if (direct) {
+        return `${direct[1]} ${direct[2]}`;
+      }
+      const parsed = new Date(value);
+      if (Number.isNaN(parsed.getTime())) {
+        return undefined;
+      }
+      const month = String(parsed.getMonth() + 1).padStart(2, "0");
+      const day = String(parsed.getDate()).padStart(2, "0");
+      const hours = String(parsed.getHours()).padStart(2, "0");
+      const minutes = String(parsed.getMinutes()).padStart(2, "0");
+      return `${parsed.getFullYear()}-${month}-${day} ${hours}:${minutes}`;
+    }
     case "select":
     case "radio": {
       const options = component.options || [];
@@ -2083,12 +2121,19 @@ function getComponentTokenValue(
     component.type === "yesno" ||
     component.type === "switch" ||
     component.type === "checkbox" ||
-    component.type === "time"
+    component.type === "time" ||
+    component.type === "date" ||
+    component.type === "datetime"
   ) {
     return formatValueForPrint(
       data[component.key],
       component.type,
-      component.optionLabels
+      component.optionLabels,
+      {
+        dateGranularity: component.dateGranularity,
+        dateDisplayFormat: component.dateDisplayFormat,
+        timeDisplayFormat: component.timeDisplayFormat
+      }
     );
   }
   return stringifyTokenValue(data[component.key]);
@@ -2512,17 +2557,67 @@ function hasMeaningfulHtml(value: string): boolean {
     .replace(/&#160;/gi, " ");
   return clean(withoutTags).length > 0;
 }
-function formatDateValueForPrint(value: string): string {
-  const trimmed = clean(value);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
-    return trimmed;
-  }
-  const parsed = new Date(`${trimmed}T00:00:00`);
-  return Number.isNaN(parsed.getTime())
-    ? trimmed
-    : parsed.toLocaleDateString("en-US");
+const MONTH_LONG_NAMES = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December"
+];
+interface TemporalPrintOptions {
+  dateGranularity?: DateGranularity;
+  dateDisplayFormat?: DateDisplayFormat;
+  timeDisplayFormat?: TimeDisplayFormat;
 }
-function formatTimeValueForPrint(value: string): string {
+function formatDateValueForPrint(
+  value: string,
+  granularity?: DateGranularity,
+  style?: DateDisplayFormat
+): string {
+  const trimmed = clean(value);
+  const resolvedStyle = style || "numeric";
+  const monthName = (month: number) => MONTH_LONG_NAMES[month - 1] || "";
+  const full = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+  if (full && (!granularity || granularity === "full")) {
+    const [, y, m, d] = full;
+    if (resolvedStyle === "iso") {
+      return trimmed;
+    }
+    if (resolvedStyle === "long") {
+      return `${monthName(Number(m))} ${Number(d)}, ${y}`;
+    }
+    return `${Number(m)}/${Number(d)}/${y}`;
+  }
+  const monthYear = /^(\d{4})-(\d{2})$/.exec(trimmed);
+  if (monthYear) {
+    const [, y, m] = monthYear;
+    if (resolvedStyle === "iso") {
+      return trimmed;
+    }
+    if (resolvedStyle === "long") {
+      return `${monthName(Number(m))} ${y}`;
+    }
+    return `${Number(m)}/${y}`;
+  }
+  if (granularity === "month" && /^\d{1,2}$/.test(trimmed)) {
+    return resolvedStyle === "long" || resolvedStyle === "numeric"
+      ? monthName(Number(trimmed)) || trimmed
+      : trimmed;
+  }
+  // year / day granularities (and anything unparsed) print as stored
+  return trimmed;
+}
+function formatTimeValueForPrint(
+  value: string,
+  style?: TimeDisplayFormat
+): string {
   const trimmed = clean(value);
   const match = /^(\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?$/.exec(trimmed);
   if (!match) {
@@ -2533,14 +2628,41 @@ function formatTimeValueForPrint(value: string): string {
   if (!Number.isFinite(hours) || hours > 23) {
     return trimmed;
   }
+  if (style === "24h") {
+    return `${match[1]}:${minutes}`;
+  }
   const meridiem = hours >= 12 ? "PM" : "AM";
   const displayHours = hours % 12 === 0 ? 12 : hours % 12;
   return `${displayHours}:${minutes} ${meridiem}`;
 }
+function formatDateTimeValueForPrint(
+  value: string,
+  options?: TemporalPrintOptions
+): string {
+  const trimmed = clean(value);
+  const match = /^(\d{4}-\d{2}-\d{2})[T ]?(\d{2}:\d{2})?$/.exec(trimmed);
+  if (!match) {
+    return trimmed;
+  }
+  const datePart = formatDateValueForPrint(
+    match[1],
+    "full",
+    options?.dateDisplayFormat
+  );
+  if (!match[2]) {
+    return datePart;
+  }
+  const timePart = formatTimeValueForPrint(
+    match[2],
+    options?.timeDisplayFormat
+  );
+  return `${datePart} ${timePart}`;
+}
 function formatValueForPrint(
   value: unknown,
   type?: FieldType | DataGridColumnType,
-  optionLabels?: Record<string, string>
+  optionLabels?: Record<string, string>,
+  temporal?: TemporalPrintOptions
 ): string {
   if (value == null) {
     return "";
@@ -2560,7 +2682,10 @@ function formatValueForPrint(
     );
   }
   if (type === "time" && typeof value === "string") {
-    return formatTimeValueForPrint(value);
+    return formatTimeValueForPrint(value, temporal?.timeDisplayFormat);
+  }
+  if (type === "datetime" && typeof value === "string") {
+    return formatDateTimeValueForPrint(value, temporal);
   }
   if (
     (type === "select" || type === "radio") &&
@@ -2576,7 +2701,11 @@ function formatValueForPrint(
       .join(", ");
   }
   if (type === "date" && typeof value === "string") {
-    return formatDateValueForPrint(value);
+    return formatDateValueForPrint(
+      value,
+      temporal?.dateGranularity,
+      temporal?.dateDisplayFormat
+    );
   }
   const text = stringifyTokenValue(value);
   if ((type === "select" || type === "radio") && optionLabels) {
@@ -4875,6 +5004,31 @@ function normalizeComponent(item: any, index: number): FormComponent {
       : type === "contentBlock" || type === "matrix"
       ? undefined
       : item?.defaultValue;
+  const dateGranularity: DateGranularity | undefined = (() => {
+    if (type !== "date") {
+      return undefined;
+    }
+    const raw = clean(item?.dateGranularity);
+    return raw === "monthYear" ||
+      raw === "month" ||
+      raw === "year" ||
+      raw === "day"
+      ? raw
+      : undefined; // "full" is the default; store nothing
+  })();
+  const dateDisplayFormat: DateDisplayFormat | undefined = (() => {
+    if (type !== "date" && type !== "datetime") {
+      return undefined;
+    }
+    const raw = clean(item?.dateDisplayFormat);
+    return raw === "long" || raw === "iso" ? raw : undefined; // default numeric
+  })();
+  const timeDisplayFormat: TimeDisplayFormat | undefined = (() => {
+    if (type !== "time" && type !== "datetime") {
+      return undefined;
+    }
+    return clean(item?.timeDisplayFormat) === "24h" ? "24h" : undefined; // default 12h
+  })();
   const customErrorMessageSource =
     item?.customErrorMessage ?? item?.validate?.customMessage;
   const customErrorMessage =
@@ -4974,6 +5128,9 @@ function normalizeComponent(item: any, index: number): FormComponent {
     datagridRowIdKey,
     systemTemplateSlotProperty,
     systemTemplateType,
+    dateGranularity,
+    dateDisplayFormat,
+    timeDisplayFormat,
     sumSources: type === "total" ? sumSources : undefined,
     scoreBands:
       type === "total" ? normalizeScoreBands(item?.scoreBands) : undefined,
@@ -5745,7 +5902,12 @@ function buildFieldSchema(component: FormComponent): JsonObject {
     return base;
   }
   const base: JsonObject = { type: "string", title };
-  if (component.type === "date") {
+  if (
+    component.type === "date" &&
+    (!component.dateGranularity || component.dateGranularity === "full")
+  ) {
+    // Partial granularities (YYYY-MM, YYYY, ...) stay plain strings so ajv's
+    // "date" format validation doesn't reject them.
     base.format = "date";
   }
   if (component.type === "time") {
@@ -6218,9 +6380,18 @@ function buildUiSchema(definition: FormDefinition): JsonObject {
     }
     if (component.type === "date") {
       fieldUi["ui:widget"] = "date";
+      if (component.dateGranularity && component.dateGranularity !== "full") {
+        fieldUi["ui:options"] = {
+          ...(fieldUi["ui:options"] || {}),
+          dateGranularity: component.dateGranularity
+        };
+      }
     }
     if (component.type === "time") {
       fieldUi["ui:widget"] = "time";
+    }
+    if (component.type === "datetime") {
+      fieldUi["ui:widget"] = "datetime";
     }
     if (component.type === "signature") {
       fieldUi["ui:widget"] = "signatureCanvas";
@@ -6306,9 +6477,21 @@ function buildUiSchema(definition: FormDefinition): JsonObject {
       }
       if (component.type === "date") {
         fieldUi["ui:widget"] = "date";
+        if (
+          component.dateGranularity &&
+          component.dateGranularity !== "full"
+        ) {
+          fieldUi["ui:options"] = {
+            ...(fieldUi["ui:options"] || {}),
+            dateGranularity: component.dateGranularity
+          };
+        }
       }
       if (component.type === "time") {
         fieldUi["ui:widget"] = "time";
+      }
+      if (component.type === "datetime") {
+        fieldUi["ui:widget"] = "datetime";
       }
       if (component.type === "signature") {
         fieldUi["ui:widget"] = "signatureCanvas";
@@ -6904,6 +7087,8 @@ function clampDateInputValue(value: unknown): string | undefined {
 }
 function DateInputWidget(props: any): ReactElement {
   const { onChange, options, registry } = props;
+  const granularity: DateGranularity =
+    (options?.dateGranularity as DateGranularity) || "full";
   const BaseInputTemplate = getTemplate(
     "BaseInputTemplate",
     registry,
@@ -6913,6 +7098,68 @@ function DateInputWidget(props: any): ReactElement {
     (value: unknown) => onChange(clampDateInputValue(value)),
     [onChange]
   );
+  const isDisabled = Boolean(props?.disabled || props?.readonly);
+  const value = clean(props?.value);
+  if (granularity === "month") {
+    return (
+      <select
+        id={props.id}
+        className="form-control rjsf-builder__temporal-select"
+        value={value}
+        disabled={isDisabled}
+        onChange={(event) => onChange(event.target.value || undefined)}
+        aria-label={props?.label || "Month"}
+      >
+        <option value="">Select month…</option>
+        {MONTH_LONG_NAMES.map((name, index) => (
+          <option key={name} value={String(index + 1).padStart(2, "0")}>
+            {name}
+          </option>
+        ))}
+      </select>
+    );
+  }
+  if (granularity === "year" || granularity === "day") {
+    const isYear = granularity === "year";
+    return (
+      <input
+        id={props.id}
+        type="number"
+        className="form-control rjsf-builder__temporal-number"
+        value={value}
+        disabled={isDisabled}
+        min={isYear ? 1900 : 1}
+        max={isYear ? 2100 : 31}
+        step={1}
+        placeholder={isYear ? "YYYY" : "Day (1–31)"}
+        aria-label={props?.label || (isYear ? "Year" : "Day of month")}
+        onChange={(event) => {
+          const raw = event.target.value;
+          if (!raw) {
+            onChange(undefined);
+            return;
+          }
+          const numeric = Math.trunc(Number(raw));
+          if (!Number.isFinite(numeric)) {
+            return;
+          }
+          onChange(
+            isYear ? String(numeric) : String(numeric).padStart(2, "0")
+          );
+        }}
+      />
+    );
+  }
+  if (granularity === "monthYear") {
+    return (
+      <BaseInputTemplate
+        max="9999-12"
+        {...props}
+        type="month"
+        onChange={(next: unknown) => onChange(clean(next) || undefined)}
+      />
+    );
+  }
   return (
     <BaseInputTemplate
       max="9999-12-31"
@@ -6920,6 +7167,52 @@ function DateInputWidget(props: any): ReactElement {
       type="date"
       onChange={handleChange}
     />
+  );
+}
+/** Combined date + time capture: two native inputs side by side storing one
+ *  "YYYY-MM-DD HH:mm" string (date-only while the time is still empty). */
+function DateTimeInputWidget(props: any): ReactElement {
+  const { onChange } = props;
+  const parsed = useMemo(() => {
+    const match = /^(\d{4}-\d{2}-\d{2})?[T ]?(\d{2}:\d{2})?/.exec(
+      clean(props?.value)
+    );
+    return { date: match?.[1] || "", time: match?.[2] || "" };
+  }, [props?.value]);
+  const isDisabled = Boolean(props?.disabled || props?.readonly);
+  const commit = useCallback(
+    (date: string, time: string) => {
+      if (!date && !time) {
+        onChange(undefined);
+        return;
+      }
+      onChange(time ? `${date} ${time}`.trim() : date);
+    },
+    [onChange]
+  );
+  return (
+    <div className="rjsf-builder__datetime">
+      <input
+        id={props.id}
+        type="date"
+        className="form-control rjsf-builder__datetime-date"
+        value={parsed.date}
+        max="9999-12-31"
+        disabled={isDisabled}
+        aria-label={props?.label ? `${props.label} — date` : "Date"}
+        onChange={(event) =>
+          commit(clampDateInputValue(event.target.value) || "", parsed.time)
+        }
+      />
+      <input
+        type="time"
+        className="form-control rjsf-builder__datetime-time"
+        value={parsed.time}
+        disabled={isDisabled}
+        aria-label={props?.label ? `${props.label} — time` : "Time"}
+        onChange={(event) => commit(parsed.date, clean(event.target.value))}
+      />
+    </div>
   );
 }
 function SignatureWidget(props: any): ReactElement {
@@ -13613,6 +13906,7 @@ export default function FormStudioBuilder(
               }}
               widgets={{
                 date: DateInputWidget,
+                datetime: DateTimeInputWidget,
                 signatureCanvas: SignatureWidget,
                 contentBlock: ContentBlockWidget,
                 systemDatagrid2Placeholder: SystemDatagrid2PlaceholderWidget,
@@ -13782,6 +14076,7 @@ export default function FormStudioBuilder(
             }}
             widgets={{
               date: DateInputWidget,
+                datetime: DateTimeInputWidget,
               signatureCanvas: SignatureWidget,
               contentBlock: ContentBlockWidget,
               systemDatagrid2Placeholder: SystemDatagrid2PlaceholderWidget,
@@ -14210,6 +14505,7 @@ export default function FormStudioBuilder(
                   }}
                   widgets={{
                     date: DateInputWidget,
+                datetime: DateTimeInputWidget,
                     signatureCanvas: SignatureWidget,
                     contentBlock: ContentBlockWidget,
                     systemDatagrid2Placeholder: SystemDatagrid2PlaceholderWidget,
@@ -14712,6 +15008,20 @@ export default function FormStudioBuilder(
                                         ? component.datagridRowIdKey
                                         : undefined,
                                       multiSelect: nextMultiSelect,
+                                      dateGranularity:
+                                        nextType === "date"
+                                          ? component.dateGranularity
+                                          : undefined,
+                                      dateDisplayFormat:
+                                        nextType === "date" ||
+                                        nextType === "datetime"
+                                          ? component.dateDisplayFormat
+                                          : undefined,
+                                      timeDisplayFormat:
+                                        nextType === "time" ||
+                                        nextType === "datetime"
+                                          ? component.timeDisplayFormat
+                                          : undefined,
                                       sumSources: isTotalType
                                         ? component.sumSources
                                         : undefined
@@ -14733,6 +15043,151 @@ export default function FormStudioBuilder(
                           </select>{" "}
                         </label>
                         )}{" "}
+                        {selectedComponent.type === "date" ||
+                        selectedComponent.type === "time" ||
+                        selectedComponent.type === "datetime" ? (
+                          <div className="rjsf-builder__block">
+                            {" "}
+                            {selectedComponent.type === "date" ? (
+                              <label className="rjsf-builder__field">
+                                {" "}
+                                <span>Date detail</span>{" "}
+                                <select
+                                  className="rjsf-builder__select"
+                                  value={
+                                    selectedComponent.dateGranularity || "full"
+                                  }
+                                  onChange={(event) => {
+                                    const raw = event.target.value;
+                                    const nextGranularity =
+                                      raw === "monthYear" ||
+                                      raw === "month" ||
+                                      raw === "year" ||
+                                      raw === "day"
+                                        ? (raw as DateGranularity)
+                                        : undefined;
+                                    updateDefinition((current) => ({
+                                      ...current,
+                                      components: current.components.map(
+                                        (component) =>
+                                          component.id === selectedComponent.id
+                                            ? {
+                                                ...component,
+                                                dateGranularity:
+                                                  nextGranularity,
+                                                // stored value shape changes
+                                                // with the detail level
+                                                defaultValue:
+                                                  nextGranularity ===
+                                                  (component.dateGranularity ||
+                                                    undefined)
+                                                    ? component.defaultValue
+                                                    : undefined
+                                              }
+                                            : component
+                                      )
+                                    }));
+                                  }}
+                                >
+                                  <option value="full">Full date</option>
+                                  <option value="monthYear">
+                                    Month &amp; year
+                                  </option>
+                                  <option value="month">Month only</option>
+                                  <option value="year">Year only</option>
+                                  <option value="day">Day of month</option>
+                                </select>{" "}
+                              </label>
+                            ) : null}{" "}
+                            {(selectedComponent.type === "date" &&
+                              (!selectedComponent.dateGranularity ||
+                                selectedComponent.dateGranularity === "full" ||
+                                selectedComponent.dateGranularity ===
+                                  "monthYear")) ||
+                            selectedComponent.type === "datetime" ? (
+                              <label className="rjsf-builder__field">
+                                {" "}
+                                <span>Date format (documents)</span>{" "}
+                                <select
+                                  className="rjsf-builder__select"
+                                  value={
+                                    selectedComponent.dateDisplayFormat ||
+                                    "numeric"
+                                  }
+                                  onChange={(event) => {
+                                    const raw = event.target.value;
+                                    const nextFormat =
+                                      raw === "long" || raw === "iso"
+                                        ? (raw as DateDisplayFormat)
+                                        : undefined;
+                                    updateDefinition((current) => ({
+                                      ...current,
+                                      components: current.components.map(
+                                        (component) =>
+                                          component.id === selectedComponent.id
+                                            ? {
+                                                ...component,
+                                                dateDisplayFormat: nextFormat
+                                              }
+                                            : component
+                                      )
+                                    }));
+                                  }}
+                                >
+                                  <option value="numeric">
+                                    Numeric — 8/20/2026
+                                  </option>
+                                  <option value="long">
+                                    Written out — August 20, 2026
+                                  </option>
+                                  <option value="iso">ISO — 2026-08-20</option>
+                                </select>{" "}
+                              </label>
+                            ) : null}{" "}
+                            {selectedComponent.type === "time" ||
+                            selectedComponent.type === "datetime" ? (
+                              <label className="rjsf-builder__field">
+                                {" "}
+                                <span>Time format (documents)</span>{" "}
+                                <select
+                                  className="rjsf-builder__select"
+                                  value={
+                                    selectedComponent.timeDisplayFormat || "12h"
+                                  }
+                                  onChange={(event) => {
+                                    const nextFormat =
+                                      event.target.value === "24h"
+                                        ? ("24h" as TimeDisplayFormat)
+                                        : undefined;
+                                    updateDefinition((current) => ({
+                                      ...current,
+                                      components: current.components.map(
+                                        (component) =>
+                                          component.id === selectedComponent.id
+                                            ? {
+                                                ...component,
+                                                timeDisplayFormat: nextFormat
+                                              }
+                                            : component
+                                      )
+                                    }));
+                                  }}
+                                >
+                                  <option value="12h">
+                                    12-hour — 2:30 PM
+                                  </option>
+                                  <option value="24h">24-hour — 14:30</option>
+                                </select>{" "}
+                              </label>
+                            ) : null}{" "}
+                            <div className="rjsf-builder__help">
+                              {" "}
+                              {selectedComponent.type === "datetime"
+                                ? "Captures a date and a time side by side. Formats control how the answer prints in narratives and documents."
+                                : "Formats control how the answer prints in narratives and documents; the on-form input follows the browser's locale."}{" "}
+                            </div>{" "}
+                          </div>
+                        ) : null}{" "}
                         {!selectedComponentSharedEntry &&
                         (selectedComponent.type === "select" ||
                           selectedComponent.type === "radio" ||
