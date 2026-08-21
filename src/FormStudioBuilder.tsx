@@ -277,6 +277,13 @@ interface FormComponent {
   /** "modern": segmented-button radios / boxed checkboxes. "switch": toggle
    *  rendering for checkbox (absorbs the former "switch" field type). */
   optionStyle?: "modern" | "switch";
+  /** Number fields: how the numeric input renders. undefined = plain input;
+   *  "stepper": −/+ counter; "slider": range track (absorbs the former
+   *  "slider" field type); "scale": segmented buttons from min..max by step. */
+  numberStyle?: "stepper" | "slider" | "scale";
+  /** Number fields: restrict answers to whole numbers (absorbs the former
+   *  "integer" field type). */
+  wholeNumber?: boolean;
   sectionSwitchEnabled?: boolean;
   multiSelect?: boolean;
   contentText?: string;
@@ -428,7 +435,6 @@ const FIELD_TYPES: Array<{ type: FieldType; label: string }> = [
   { type: "text", label: "Text input" },
   { type: "textarea", label: "Textarea" },
   { type: "number", label: "Number" },
-  { type: "integer", label: "Integer" },
   { type: "checkbox", label: "Checkbox" },
   { type: "date", label: "Date" },
   { type: "email", label: "Email" },
@@ -443,8 +449,7 @@ const FIELD_TYPES: Array<{ type: FieldType; label: string }> = [
   { type: "systemDatagrid2", label: "System Template" },
   { type: "signature", label: "Signature" },
   { type: "total", label: "Calculated total" },
-  { type: "matrix", label: "Matrix / rating grid" },
-  { type: "slider", label: "Slider" }
+  { type: "matrix", label: "Matrix / rating grid" }
 ];
 const DATAGRID_COLUMN_TYPES: Array<{
   type: DataGridColumnType;
@@ -673,8 +678,6 @@ const FIELD_PALETTE_GROUPS: Array<{
       "text",
       "textarea",
       "number",
-      "integer",
-      "slider",
       "date",
       "time",
       "datetime",
@@ -1858,7 +1861,7 @@ function coerceTokenPrefillValue(
       if (!Number.isFinite(numeric)) {
         return undefined;
       }
-      return component.type === "integer" ? Math.trunc(numeric) : numeric;
+      return isWholeNumberComponent(component) ? Math.trunc(numeric) : numeric;
     }
     case "date": {
       if (/^\d{4}-\d{2}-\d{2}/.test(value)) {
@@ -3264,6 +3267,11 @@ function normalizeFieldType(value: unknown): FieldType {
   if (FIELD_TYPE_SET.has(raw as FieldType)) {
     return raw as FieldType;
   }
+  // Legacy types no longer offered in the palette but still valid on load;
+  // normalizeComponent folds them into "number".
+  if (raw === "integer" || raw === "slider") {
+    return raw as FieldType;
+  }
   const lower = raw.toLowerCase();
   const matched = FIELD_TYPES.find((item) => item.type.toLowerCase() === lower);
   return matched?.type || "text";
@@ -4017,6 +4025,26 @@ function resolveSliderBounds(component: FormComponent): {
   const multipleOf = parseOptionalPositiveNumber(component.multipleOf) ?? 1;
   return { minimum, maximum, multipleOf };
 }
+/** Number fields: effective render style, folding the legacy "slider" field
+ *  type into the unified number style set. */
+function numberStyleOf(
+  component: FormComponent
+): "input" | "stepper" | "slider" | "scale" {
+  if (component.type === "slider") {
+    return "slider";
+  }
+  if (component.type !== "number") {
+    return "input";
+  }
+  return component.numberStyle || "input";
+}
+/** Number fields: whole-numbers-only, folding the legacy "integer" type in. */
+function isWholeNumberComponent(component: FormComponent): boolean {
+  return (
+    component.type === "integer" ||
+    (component.type === "number" && Boolean(component.wholeNumber))
+  );
+}
 function normalizeDataGridColumns(
   value: unknown
 ): DataGridColumn[] | undefined {
@@ -4370,8 +4398,15 @@ function buildFieldClassNames(component: FormComponent): string | undefined {
   if (component.type === "matrix") {
     classes.push("rjsf-builder__field--matrix");
   }
-  if (component.type === "slider") {
+  const numStyle = numberStyleOf(component);
+  if (numStyle === "slider") {
     classes.push("rjsf-builder__field--slider");
+  }
+  if (numStyle === "stepper") {
+    classes.push("rjsf-builder__field--num-stepper");
+  }
+  if (numStyle === "scale") {
+    classes.push("rjsf-builder__field--num-scale");
   }
   return classes.length ? classes.join(" ") : undefined;
 }
@@ -4835,9 +4870,29 @@ function normalizeVisibility(value: any): VisibilityConfig | undefined {
 function normalizeComponent(item: any, index: number): FormComponent {
   // "switch" merged into "checkbox" (2026-08-14): legacy switch components
   // become checkboxes with the switch option style.
+  // "integer" and "slider" merged into "number" (2026-08-21): legacy fields
+  // become numbers with the whole-number flag / slider option style.
   const rawType = normalizeFieldType(item?.type);
   const isLegacySwitch = rawType === "switch";
-  const type = isLegacySwitch ? "checkbox" : rawType;
+  const isLegacyInteger = rawType === "integer";
+  const isLegacySlider = rawType === "slider";
+  const type = isLegacySwitch
+    ? "checkbox"
+    : isLegacyInteger || isLegacySlider
+    ? "number"
+    : rawType;
+  const wholeNumber =
+    type === "number" && (isLegacyInteger || toBoolean(item?.wholeNumber));
+  const numberStyle: FormComponent["numberStyle"] =
+    type !== "number"
+      ? undefined
+      : isLegacySlider || clean(item?.numberStyle) === "slider"
+      ? "slider"
+      : clean(item?.numberStyle) === "stepper"
+      ? "stepper"
+      : clean(item?.numberStyle) === "scale"
+      ? "scale"
+      : undefined;
   const keySeed = clean(item?.key) || `field_${index + 1}`;
   const key = normalizeKey(keySeed);
   const labelRaw = item?.label == null ? "" : String(item.label);
@@ -4886,12 +4941,12 @@ function normalizeComponent(item: any, index: number): FormComponent {
     item?.sumSources || item?.sumSourceKeys || item?.calculation?.sourceKeys
   );
   const numericBounds =
-    type === "integer"
+    wholeNumber
       ? normalizeIntegerBounds(
           item?.minimum ?? item?.min ?? item?.minValue,
           item?.maximum ?? item?.max ?? item?.maxValue
         )
-      : type === "number" || type === "slider"
+      : type === "number"
       ? normalizeNumberBounds(
           item?.minimum ?? item?.min ?? item?.minValue,
           item?.maximum ?? item?.max ?? item?.maxValue
@@ -4903,7 +4958,7 @@ function normalizeComponent(item: any, index: number): FormComponent {
     ? normalizeLengthBounds(item?.minLength, item?.maxLength)
     : { minLength: undefined, maxLength: undefined };
   const multipleOf =
-    type === "number" || type === "integer" || type === "slider"
+    type === "number"
       ? parseOptionalPositiveNumber(item?.multipleOf ?? item?.step)
       : undefined;
   const multiSelect =
@@ -5112,6 +5167,8 @@ function normalizeComponent(item: any, index: number): FormComponent {
         : clean(item?.optionStyle) === "switch" || isLegacySwitch
         ? "switch"
         : undefined,
+    numberStyle,
+    wholeNumber: wholeNumber || undefined,
     sectionSwitchEnabled: toBoolean(
       item?.sectionSwitchEnabled ??
         item?.allowSectionToggle ??
@@ -5586,6 +5643,24 @@ function sanitizeValueForComponent(
     if (!Number.isFinite(numValue)) {
       return undefined;
     }
+    const style = numberStyleOf(component);
+    const whole = isWholeNumberComponent(component);
+    if (style === "slider" || style === "scale") {
+      const bounds = resolveSliderBounds(component);
+      const clamped = applyNumberBounds(
+        numValue,
+        bounds.minimum,
+        bounds.maximum
+      );
+      return whole ? Math.trunc(clamped) : clamped;
+    }
+    if (whole) {
+      const bounds = normalizeIntegerBounds(
+        component.minimum,
+        component.maximum
+      );
+      return applyIntegerBounds(numValue, bounds.minimum, bounds.maximum);
+    }
     const bounds = normalizeNumberBounds(component.minimum, component.maximum);
     return applyNumberBounds(numValue, bounds.minimum, bounds.maximum);
   }
@@ -5832,22 +5907,40 @@ function buildFieldSchema(component: FormComponent): JsonObject {
     return schema;
   }
   if (component.type === "number") {
-    const bounds = normalizeNumberBounds(component.minimum, component.maximum);
-    const multipleOf = parseOptionalPositiveNumber(component.multipleOf);
+    const style = numberStyleOf(component);
+    const whole = isWholeNumberComponent(component);
+    // Slider/scale need concrete bounds to render; fall back to 0–10 step 1.
+    const bounds =
+      style === "slider" || style === "scale"
+        ? resolveSliderBounds(component)
+        : whole
+        ? normalizeIntegerBounds(component.minimum, component.maximum)
+        : normalizeNumberBounds(component.minimum, component.maximum);
+    const multipleOf =
+      style === "slider" || style === "scale"
+        ? (bounds as { multipleOf?: number }).multipleOf
+        : parseOptionalPositiveNumber(component.multipleOf);
     return {
-      type: "number",
+      type: whole ? "integer" : "number",
       title,
       default:
         typeof component.defaultValue === "number"
-          ? applyNumberBounds(
-              component.defaultValue,
-              bounds.minimum,
-              bounds.maximum
-            )
+          ? whole
+            ? applyIntegerBounds(
+                component.defaultValue,
+                bounds.minimum,
+                bounds.maximum
+              )
+            : applyNumberBounds(
+                component.defaultValue,
+                bounds.minimum,
+                bounds.maximum
+              )
           : undefined,
       minimum: bounds.minimum,
       maximum: bounds.maximum,
-      multipleOf
+      multipleOf,
+      description: component.description || undefined
     };
   }
   if (component.type === "integer") {
@@ -5978,7 +6071,7 @@ function coerceVisibilityRuleValue(
   ) {
     const numeric = toNumericValue(raw);
     if (numeric != null) {
-      return component.type === "integer" ? Math.floor(numeric) : numeric;
+      return isWholeNumberComponent(component) ? Math.floor(numeric) : numeric;
     }
     return str(raw);
   }
@@ -6399,6 +6492,16 @@ function buildUiSchema(definition: FormDefinition): JsonObject {
     if (component.type === "slider") {
       fieldUi["ui:widget"] = "range";
     }
+    if (component.type === "number") {
+      const numStyle = numberStyleOf(component);
+      if (numStyle === "slider") {
+        fieldUi["ui:widget"] = "range";
+      } else if (numStyle === "stepper") {
+        fieldUi["ui:widget"] = "numberStepper";
+      } else if (numStyle === "scale") {
+        fieldUi["ui:widget"] = "numberScale";
+      }
+    }
     if (component.type === "matrix") {
       fieldUi["ui:field"] = "matrixGrid";
       fieldUi["ui:options"] = {
@@ -6504,6 +6607,16 @@ function buildUiSchema(definition: FormDefinition): JsonObject {
       }
       if (component.type === "slider") {
         fieldUi["ui:widget"] = "range";
+      }
+      if (component.type === "number") {
+        const numStyle = numberStyleOf(component);
+        if (numStyle === "slider") {
+          fieldUi["ui:widget"] = "range";
+        } else if (numStyle === "stepper") {
+          fieldUi["ui:widget"] = "numberStepper";
+        } else if (numStyle === "scale") {
+          fieldUi["ui:widget"] = "numberScale";
+        }
       }
       if (component.type === "date") {
         fieldUi["ui:widget"] = "date";
@@ -7114,6 +7227,124 @@ function clampDateInputValue(value: unknown): string | undefined {
     return `${match[1]}${match[2]}`;
   }
   return text;
+}
+/** Number fields, "stepper" style: −/+ counter around a numeric input. */
+function NumberStepperWidget(props: any): ReactElement {
+  const { onChange, schema } = props;
+  const disabled = Boolean(props?.disabled || props?.readonly);
+  const min = typeof schema?.minimum === "number" ? schema.minimum : undefined;
+  const max = typeof schema?.maximum === "number" ? schema.maximum : undefined;
+  const step =
+    typeof schema?.multipleOf === "number" && schema.multipleOf > 0
+      ? schema.multipleOf
+      : 1;
+  const numeric = typeof props?.value === "number" ? props.value : undefined;
+  const clampValue = (next: number): number => {
+    let bounded = next;
+    if (min != null && bounded < min) {
+      bounded = min;
+    }
+    if (max != null && bounded > max) {
+      bounded = max;
+    }
+    // Snap to the step grid; toFixed kills float drift (0.1 + 0.2 style).
+    return Number((Math.round(bounded / step) * step).toFixed(6));
+  };
+  const nudge = (direction: number): void => {
+    const next = numeric == null ? min ?? 0 : numeric + direction * step;
+    onChange(clampValue(next));
+  };
+  return (
+    <div className="rjsf-builder__num-stepper">
+      <button
+        type="button"
+        className="rjsf-builder__num-stepper-btn"
+        aria-label="Decrease"
+        disabled={disabled || (numeric != null && min != null && numeric <= min)}
+        onClick={() => nudge(-1)}
+      >
+        −
+      </button>
+      <input
+        id={props.id}
+        type="number"
+        className="form-control rjsf-builder__num-stepper-input"
+        value={numeric ?? ""}
+        min={min}
+        max={max}
+        step={step}
+        disabled={disabled}
+        inputMode="decimal"
+        aria-label={props?.label || "Number"}
+        onChange={(event) => {
+          const raw = event.target.value;
+          if (raw === "") {
+            onChange(undefined);
+            return;
+          }
+          const parsed = Number(raw);
+          if (Number.isFinite(parsed)) {
+            onChange(parsed);
+          }
+        }}
+      />
+      <button
+        type="button"
+        className="rjsf-builder__num-stepper-btn"
+        aria-label="Increase"
+        disabled={disabled || (numeric != null && max != null && numeric >= max)}
+        onClick={() => nudge(1)}
+      >
+        +
+      </button>
+    </div>
+  );
+}
+/** Number fields, "scale" style: one button per value from min..max by step
+ *  (pain/rating scales). Clicking the selected value clears the answer. */
+function NumberScaleWidget(props: any): ReactElement {
+  const { onChange, schema } = props;
+  const disabled = Boolean(props?.disabled || props?.readonly);
+  const min = typeof schema?.minimum === "number" ? schema.minimum : 0;
+  const maxRaw = typeof schema?.maximum === "number" ? schema.maximum : 10;
+  const max = maxRaw < min ? min : maxRaw;
+  const step =
+    typeof schema?.multipleOf === "number" && schema.multipleOf > 0
+      ? schema.multipleOf
+      : 1;
+  const scaleValues: number[] = [];
+  for (
+    let value = min;
+    value <= max + 1e-9 && scaleValues.length < 50;
+    value += step
+  ) {
+    scaleValues.push(Number(value.toFixed(6)));
+  }
+  const numeric = typeof props?.value === "number" ? props.value : undefined;
+  return (
+    <div
+      className="rjsf-builder__num-scale"
+      role="radiogroup"
+      aria-label={props?.label || "Scale"}
+    >
+      {scaleValues.map((option) => (
+        <button
+          key={option}
+          type="button"
+          role="radio"
+          aria-checked={numeric === option}
+          className={
+            "rjsf-builder__num-scale-btn" +
+            (numeric === option ? " is-selected" : "")
+          }
+          disabled={disabled}
+          onClick={() => onChange(numeric === option ? undefined : option)}
+        >
+          {option}
+        </button>
+      ))}
+    </div>
+  );
 }
 function DateInputWidget(props: any): ReactElement {
   const { onChange, options, registry } = props;
@@ -12116,6 +12347,24 @@ export default function FormStudioBuilder(
       }
       if (component.type === "number") {
         const numValue = Number(value);
+        const style = numberStyleOf(component);
+        const whole = isWholeNumberComponent(component);
+        if (style === "slider" || style === "scale") {
+          const bounds = resolveSliderBounds(component);
+          const clamped = Number.isFinite(numValue)
+            ? applyNumberBounds(numValue, bounds.minimum, bounds.maximum)
+            : bounds.minimum;
+          return whole ? Math.trunc(clamped) : clamped;
+        }
+        if (whole) {
+          const bounds = normalizeIntegerBounds(
+            component.minimum,
+            component.maximum
+          );
+          return Number.isFinite(numValue)
+            ? applyIntegerBounds(numValue, bounds.minimum, bounds.maximum)
+            : bounds.minimum ?? 0;
+        }
         const bounds = normalizeNumberBounds(
           component.minimum,
           component.maximum
@@ -14051,7 +14300,9 @@ export default function FormStudioBuilder(
                 signatureCanvas: SignatureWidget,
                 contentBlock: ContentBlockWidget,
                 systemDatagrid2Placeholder: SystemDatagrid2PlaceholderWidget,
-                scoreTotal: ScoreTotalWidget
+                scoreTotal: ScoreTotalWidget,
+                numberStepper: NumberStepperWidget,
+                numberScale: NumberScaleWidget
               }}
               fields={FORM_FIELDS}
               templates={FORM_TEMPLATES}
@@ -14221,7 +14472,9 @@ export default function FormStudioBuilder(
               signatureCanvas: SignatureWidget,
               contentBlock: ContentBlockWidget,
               systemDatagrid2Placeholder: SystemDatagrid2PlaceholderWidget,
-                scoreTotal: ScoreTotalWidget
+                scoreTotal: ScoreTotalWidget,
+              numberStepper: NumberStepperWidget,
+              numberScale: NumberScaleWidget
             }}
             fields={FORM_FIELDS}
             templates={FORM_TEMPLATES}
@@ -14650,7 +14903,9 @@ export default function FormStudioBuilder(
                     signatureCanvas: SignatureWidget,
                     contentBlock: ContentBlockWidget,
                     systemDatagrid2Placeholder: SystemDatagrid2PlaceholderWidget,
-                scoreTotal: ScoreTotalWidget
+                scoreTotal: ScoreTotalWidget,
+                    numberStepper: NumberStepperWidget,
+                    numberScale: NumberScaleWidget
                   }}
                   fields={FORM_FIELDS}
                   templates={FORM_TEMPLATES}
@@ -14953,6 +15208,112 @@ export default function FormStudioBuilder(
                                 </select>{" "}
                               </label>
                             ) : null}{" "}
+                            {selectedComponent.type === "number" ? (
+                              <Fragment>
+                                <label className="rjsf-builder__field">
+                                  {" "}
+                                  <span>Option style</span>{" "}
+                                  <select
+                                    className="rjsf-builder__select"
+                                    value={
+                                      selectedComponent.numberStyle || "input"
+                                    }
+                                    onChange={(event) =>
+                                      updateDefinition((current) => ({
+                                        ...current,
+                                        components: current.components.map(
+                                          (component) => {
+                                            if (
+                                              component.id !==
+                                              selectedComponent.id
+                                            ) {
+                                              return component;
+                                            }
+                                            const raw = event.target.value;
+                                            const nextStyle =
+                                              raw === "stepper" ||
+                                              raw === "slider" ||
+                                              raw === "scale"
+                                                ? raw
+                                                : undefined;
+                                            return {
+                                              ...component,
+                                              numberStyle: nextStyle,
+                                              // Slider/stepper/scale are
+                                              // step-driven; default to whole
+                                              // numbers unless already chosen.
+                                              wholeNumber:
+                                                nextStyle &&
+                                                component.wholeNumber == null
+                                                  ? true
+                                                  : component.wholeNumber
+                                            };
+                                          }
+                                        )
+                                      }))
+                                    }
+                                  >
+                                    {" "}
+                                    <option value="input">
+                                      Input (standard)
+                                    </option>{" "}
+                                    <option value="stepper">
+                                      Stepper (− / + counter)
+                                    </option>{" "}
+                                    <option value="slider">
+                                      Slider (drag track)
+                                    </option>{" "}
+                                    <option value="scale">
+                                      Scale (numbered buttons)
+                                    </option>{" "}
+                                  </select>{" "}
+                                </label>
+                                <label className="rjsf-builder__toggle">
+                                  {" "}
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(
+                                      selectedComponent.wholeNumber
+                                    )}
+                                    onChange={(event) =>
+                                      updateDefinition((current) => ({
+                                        ...current,
+                                        components: current.components.map(
+                                          (component) =>
+                                            component.id ===
+                                            selectedComponent.id
+                                              ? {
+                                                  ...component,
+                                                  wholeNumber: event.target
+                                                    .checked
+                                                    ? true
+                                                    : undefined,
+                                                  defaultValue:
+                                                    event.target.checked &&
+                                                    typeof component.defaultValue ===
+                                                      "number"
+                                                      ? Math.trunc(
+                                                          component.defaultValue
+                                                        )
+                                                      : component.defaultValue
+                                                }
+                                              : component
+                                        )
+                                      }))
+                                    }
+                                  />{" "}
+                                  <span>Whole numbers only</span>{" "}
+                                </label>
+                                {(selectedComponent.numberStyle === "slider" ||
+                                  selectedComponent.numberStyle ===
+                                    "scale") && (
+                                  <span className="rjsf-builder__help">
+                                    Uses Min / Max / Step from Validation
+                                    (defaults 0–10, step 1).
+                                  </span>
+                                )}
+                              </Fragment>
+                            ) : null}{" "}
                           </div>
                         ) : null}{" "}
                         {selectedComponentSharedEntry ? null : (
@@ -15074,6 +15435,14 @@ export default function FormStudioBuilder(
                                       multipleOf: isNumericType
                                         ? component.multipleOf
                                         : undefined,
+                                      numberStyle:
+                                        nextType === "number"
+                                          ? component.numberStyle
+                                          : undefined,
+                                      wholeNumber:
+                                        nextType === "number"
+                                          ? component.wholeNumber
+                                          : undefined,
                                       minLength: isTextValidationType
                                         ? component.minLength
                                         : undefined,
@@ -16693,7 +17062,8 @@ export default function FormStudioBuilder(
                     {!selectedComponentSharedEntry &&
                     selectedComponent.type !== "datagrid" &&
                     selectedComponent.type !== "matrix" &&
-                    selectedComponent.type !== "slider" ? (
+                    numberStyleOf(selectedComponent) !== "slider" &&
+                    numberStyleOf(selectedComponent) !== "scale" ? (
                       <label className="rjsf-builder__field">
                         {" "}
                         <span>Placeholder</span>{" "}
@@ -16871,7 +17241,7 @@ export default function FormStudioBuilder(
                                 <input
                                   type="number"
                                   step={
-                                    selectedComponent.type === "integer"
+                                    isWholeNumberComponent(selectedComponent)
                                       ? 1
                                       : "any"
                                   }
@@ -16889,7 +17259,7 @@ export default function FormStudioBuilder(
                                             return component;
                                           }
                                           const isInteger =
-                                            component.type === "integer";
+                                            isWholeNumberComponent(component);
                                           const nextMinimum = isInteger
                                             ? parseOptionalInteger(
                                                 event.target.value
@@ -16942,7 +17312,7 @@ export default function FormStudioBuilder(
                                 <input
                                   type="number"
                                   step={
-                                    selectedComponent.type === "integer"
+                                    isWholeNumberComponent(selectedComponent)
                                       ? 1
                                       : "any"
                                   }
@@ -16960,7 +17330,7 @@ export default function FormStudioBuilder(
                                             return component;
                                           }
                                           const isInteger =
-                                            component.type === "integer";
+                                            isWholeNumberComponent(component);
                                           const nextMaximumRaw = isInteger
                                             ? parseOptionalInteger(
                                                 event.target.value
@@ -17014,7 +17384,7 @@ export default function FormStudioBuilder(
                                 type="number"
                                 min={0}
                                 step={
-                                  selectedComponent.type === "integer"
+                                  isWholeNumberComponent(selectedComponent)
                                     ? 1
                                     : "any"
                                 }

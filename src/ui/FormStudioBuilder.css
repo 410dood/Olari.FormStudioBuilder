@@ -1209,6 +1209,110 @@
   background: #fff;
 }
 
+/* Number field, "stepper" option style: −/+ counter around a numeric input.
+   input selectors are `input.`-prefixed + !important to outrank the legacy
+   RjsfFormBuilder bundle's `.rjsf-builder input { width:100% }` in the
+   aggregated widgets.css (see the @container note near the grid overrides). */
+.rjsf-builder__num-stepper {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 0;
+  border: 1px solid var(--rb-border);
+  border-radius: 10px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.rjsf-builder__num-stepper-btn {
+  border: none;
+  background: var(--rb-surface);
+  color: var(--rb-text);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1;
+  width: 38px;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.rjsf-builder__num-stepper-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--rb-accent) 10%, var(--rb-surface));
+  color: var(--rb-accent);
+}
+
+.rjsf-builder__num-stepper-btn:disabled {
+  color: var(--rb-muted);
+  cursor: default;
+  opacity: 0.55;
+}
+
+.rjsf-builder__num-stepper-btn:focus-visible {
+  outline: 2px solid var(--rb-accent);
+  outline-offset: -2px;
+}
+
+input.rjsf-builder__num-stepper-input {
+  width: 84px !important;
+  min-width: 0;
+  text-align: center;
+  border: none !important;
+  border-left: 1px solid var(--rb-border) !important;
+  border-right: 1px solid var(--rb-border) !important;
+  border-radius: 0 !important;
+  box-shadow: none;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+input.rjsf-builder__num-stepper-input::-webkit-outer-spin-button,
+input.rjsf-builder__num-stepper-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* Number field, "scale" option style: one pill button per value (0–10 pain
+   scales etc.), styled to match the modern radio pills. */
+.rjsf-builder__num-scale {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.rjsf-builder__num-scale-btn {
+  min-width: 40px;
+  padding: 9px 10px;
+  text-align: center;
+  border: 1px solid var(--rb-border);
+  border-radius: 10px;
+  background: var(--rb-surface);
+  color: var(--rb-text);
+  font-weight: 500;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease,
+    color 120ms ease;
+}
+
+.rjsf-builder__num-scale-btn:hover:not(:disabled) {
+  border-color: var(--rb-accent);
+}
+
+.rjsf-builder__num-scale-btn.is-selected {
+  border-color: var(--rb-accent);
+  color: var(--rb-accent);
+  background: color-mix(in srgb, var(--rb-accent) 8%, var(--rb-surface));
+}
+
+.rjsf-builder__num-scale-btn:focus-visible {
+  outline: 2px solid var(--rb-accent);
+  outline-offset: 2px;
+}
+
+.rjsf-builder__num-scale-btn:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
 .rjsf-builder__toggle--compact {
   justify-content: center;
 }
