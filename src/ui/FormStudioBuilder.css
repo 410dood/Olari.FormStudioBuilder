@@ -1198,6 +1198,53 @@
   box-shadow: none;
 }
 
+/* Slider track was invisible: resets strip the native track, leaving only the
+   thumb. Draw both explicitly. !important on the input itself outranks the
+   legacy RjsfFormBuilder bundle's `.rjsf-builder input` rules in widgets.css;
+   the pseudo-element track/thumb rules have no legacy contender. */
+.rjsf-builder input[type="range"] {
+  -webkit-appearance: none !important;
+  appearance: none !important;
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  height: 24px !important;
+  box-shadow: none !important;
+  cursor: pointer;
+}
+
+.rjsf-builder input[type="range"]::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 999px;
+  background: #d7dde9;
+}
+
+.rjsf-builder input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--rb-accent);
+  border: 2px solid #fff;
+  box-shadow: 0 1px 3px rgba(28, 35, 64, 0.35);
+  margin-top: -6px;
+}
+
+.rjsf-builder input[type="range"]::-moz-range-track {
+  height: 6px;
+  border-radius: 999px;
+  background: #d7dde9;
+}
+
+.rjsf-builder input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--rb-accent);
+  border: 2px solid #fff;
+  box-shadow: 0 1px 3px rgba(28, 35, 64, 0.35);
+}
+
 .rjsf-builder__field--slider .range-view {
   min-width: 34px;
   text-align: center;
