@@ -10452,6 +10452,63 @@ export default function FormStudioBuilder(
   }, []);
   const [rightPanelCollapsed, setRightPanelCollapsed] =
     useState<boolean>(false);
+  // Responsive builder: the widget's own width drives layout adaptations
+  // (viewport queries lie when the widget sits in a padded page column).
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [builderWidth, setBuilderWidth] = useState<number>(0);
+  useEffect(() => {
+    const node = rootRef.current;
+    if (!node || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect?.width;
+      if (typeof width === "number" && width > 0) {
+        setBuilderWidth(width);
+      }
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+  const isNarrowBuilder = builderWidth > 0 && builderWidth < 1140;
+  const isPhoneBuilder = builderWidth > 0 && builderWidth < 620;
+  // Crossing into narrow: park both side panels as icon rails (they reopen as
+  // overlays); crossing back to wide restores them. User toggles still work.
+  const prevNarrowRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (builderWidth === 0 || prevNarrowRef.current === isNarrowBuilder) {
+      return;
+    }
+    prevNarrowRef.current = isNarrowBuilder;
+    setLeftPanelCollapsed(isNarrowBuilder);
+    setRightPanelCollapsed(isNarrowBuilder);
+  }, [builderWidth, isNarrowBuilder]);
+  // Phone-width designer opens straight into Preview (test-fill works there);
+  // one-shot so the user can still switch back to Designer deliberately.
+  const phoneAutoPreviewRef = useRef<boolean>(false);
+  const viewModeIsViewer = props.viewMode === "viewer";
+  useEffect(() => {
+    if (viewModeIsViewer || !isPhoneBuilder || phoneAutoPreviewRef.current) {
+      return;
+    }
+    phoneAutoPreviewRef.current = true;
+    setBuilderTab("preview");
+  }, [isPhoneBuilder, viewModeIsViewer]);
+  // Narrow toolbar: form settings live in a popover behind one button.
+  const [formSettingsOpen, setFormSettingsOpen] = useState<boolean>(false);
+  const formSettingsRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!formSettingsOpen) {
+      return;
+    }
+    const onPointerDown = (event: PointerEvent) => {
+      if (!formSettingsRef.current?.contains(event.target as Node)) {
+        setFormSettingsOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [formSettingsOpen]);
   const [tokenPreviewMode, setTokenPreviewMode] = useState<"html" | "rendered">(
     "rendered"
   );
@@ -13682,7 +13739,9 @@ export default function FormStudioBuilder(
     isViewer ? `rjsf-builder--theme-${themePreset}` : "",
     isViewer && props.previewFlow === "continuous"
       ? "rjsf-builder--preview-continuous"
-      : ""
+      : "",
+    isNarrowBuilder ? "rjsf-builder--narrow" : "",
+    isPhoneBuilder ? "rjsf-builder--phone" : ""
   ]
     .filter(Boolean)
     .join(" ");
@@ -13820,8 +13879,141 @@ export default function FormStudioBuilder(
         "--rb-label-col": `${((labelWidthTwelfths / 12) * 100).toFixed(3)}%`
       } as CSSProperties)
     : props.style;
+  // Form-level settings controls, rendered inline on wide builders and inside
+  // the "Form settings" popover on narrow ones (same handlers, one source).
+  const formSettingsControls = !isViewer ? (
+    <Fragment>
+      <label className="rjsf-builder__toggle">
+        {" "}
+        <input
+          type="checkbox"
+          checked={definition.builderOptions?.snapToGrid !== false}
+          onChange={(event) =>
+            updateBuilderOptions((options) => ({
+              ...options,
+              snapToGrid: event.target.checked
+            }))
+          }
+        />{" "}
+        <span>Snap to grid</span>{" "}
+      </label>
+      <label className="rjsf-builder__toggle">
+        {" "}
+        <input
+          type="checkbox"
+          checked={definition.builderOptions?.snapToResize !== false}
+          onChange={(event) =>
+            updateBuilderOptions((options) => ({
+              ...options,
+              snapToResize: event.target.checked
+            }))
+          }
+        />{" "}
+        <span>Snap resize</span>{" "}
+      </label>
+      <label className="rjsf-builder__toolbar-field rjsf-builder__toolbar-field--compact">
+        {" "}
+        <span>Label layout</span>{" "}
+        <select
+          className="rjsf-builder__select rjsf-builder__select--compact"
+          value={
+            definition.builderOptions?.labelLayout === "inline"
+              ? "inline"
+              : "block"
+          }
+          onChange={(event) =>
+            updateBuilderOptions((options) => ({
+              ...options,
+              labelLayout:
+                event.target.value === "inline" ? "inline" : "block"
+            }))
+          }
+        >
+          {" "}
+          {LABEL_LAYOUT_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {" "}
+              {option.label}{" "}
+            </option>
+          ))}{" "}
+        </select>{" "}
+      </label>
+      <label className="rjsf-builder__toolbar-field rjsf-builder__toolbar-field--compact">
+        {" "}
+        <span>Label width</span>{" "}
+        <select
+          className="rjsf-builder__select rjsf-builder__select--compact"
+          value={String(definition.builderOptions?.labelWidth ?? "")}
+          onChange={(event) => {
+            const parsed = Math.round(Number(event.target.value));
+            updateBuilderOptions((options) => ({
+              ...options,
+              labelWidth:
+                Number.isFinite(parsed) && parsed >= 2 && parsed <= 6
+                  ? parsed
+                  : undefined
+            }));
+          }}
+        >
+          {" "}
+          <option value="">Default (fixed)</option>{" "}
+          <option value="2">2 / 12 (narrow)</option>{" "}
+          <option value="3">3 / 12</option>{" "}
+          <option value="4">4 / 12</option>{" "}
+          <option value="5">5 / 12</option>{" "}
+          <option value="6">6 / 12 (half)</option>{" "}
+        </select>{" "}
+      </label>
+      <label className="rjsf-builder__toolbar-field rjsf-builder__toolbar-field--compact">
+        {" "}
+        <span>Fill mode</span>{" "}
+        <select
+          className="rjsf-builder__select rjsf-builder__select--compact"
+          value={
+            definition.builderOptions?.fillMode === "wizard"
+              ? "wizard"
+              : "scroll"
+          }
+          onChange={(event) =>
+            updateBuilderOptions((options) => ({
+              ...options,
+              fillMode: event.target.value === "wizard" ? "wizard" : "scroll"
+            }))
+          }
+        >
+          {" "}
+          <option value="scroll">Continuous (scroll)</option>{" "}
+          <option value="wizard">Wizard (one section per page)</option>{" "}
+        </select>{" "}
+      </label>
+    </Fragment>
+  ) : null;
+  // Phone-width viewer: the sections rail renders as sticky chips and ignores
+  // the collapsed state (there is no rail column to collapse into).
+  const viewerNavCollapsed = leftPanelCollapsed && !isPhoneBuilder;
+  const formDescriptionField = !isViewer ? (
+    <label className="rjsf-builder__toolbar-field rjsf-builder__toolbar-field--wide">
+      {" "}
+      <span>Form description</span>{" "}
+      <input
+        className="rjsf-builder__input"
+        value={definition.description || ""}
+        onChange={(event) =>
+          updateDefinition((current) => ({
+            ...current,
+            description: event.target.value
+          }))
+        }
+      />{" "}
+    </label>
+  ) : null;
   return (
-    <div className={className} style={rootStyle} tabIndex={props.tabIndex}>
+    <div
+      className={className}
+      style={rootStyle}
+      tabIndex={props.tabIndex}
+      ref={rootRef}
+    >
       <WidgetToasts attr={props.toastMessageAttr} />
       {" "}
       {!isViewer || showViewerHeader ? (
@@ -13843,136 +14035,37 @@ export default function FormStudioBuilder(
                 }
               />{" "}
             </label>{" "}
-            {!isViewer ? (
-              <label className="rjsf-builder__toolbar-field rjsf-builder__toolbar-field--wide">
-                {" "}
-                <span>Form description</span>{" "}
-                <input
-                  className="rjsf-builder__input"
-                  value={definition.description || ""}
-                  onChange={(event) =>
-                    updateDefinition((current) => ({
-                      ...current,
-                      description: event.target.value
-                    }))
-                  }
-                />{" "}
-              </label>
-            ) : null}{" "}
+            {!isNarrowBuilder ? formDescriptionField : null}{" "}
           </div>{" "}
           <div className="rjsf-builder__toolbar-right">
             {" "}
-            {!isViewer ? (
+            {!isViewer && !isNarrowBuilder ? (
               <div className="rjsf-builder__toolbar-toggles">
+                {formSettingsControls}
+              </div>
+            ) : null}{" "}
+            {!isViewer && isNarrowBuilder ? (
+              <div
+                className="rjsf-builder__toolbar-settings"
+                ref={formSettingsRef}
+              >
                 {" "}
-                <label className="rjsf-builder__toggle">
+                <button
+                  type="button"
+                  className="rjsf-builder__button"
+                  aria-expanded={formSettingsOpen}
+                  aria-haspopup="true"
+                  onClick={() => setFormSettingsOpen((current) => !current)}
+                >
                   {" "}
-                  <input
-                    type="checkbox"
-                    checked={definition.builderOptions?.snapToGrid !== false}
-                    onChange={(event) =>
-                      updateBuilderOptions((options) => ({
-                        ...options,
-                        snapToGrid: event.target.checked
-                      }))
-                    }
-                  />{" "}
-                  <span>Snap to grid</span>{" "}
-                </label>{" "}
-                <label className="rjsf-builder__toggle">
-                  {" "}
-                  <input
-                    type="checkbox"
-                    checked={definition.builderOptions?.snapToResize !== false}
-                    onChange={(event) =>
-                      updateBuilderOptions((options) => ({
-                        ...options,
-                        snapToResize: event.target.checked
-                      }))
-                    }
-                  />{" "}
-                  <span>Snap resize</span>{" "}
-                </label>{" "}
-                <label className="rjsf-builder__toolbar-field rjsf-builder__toolbar-field--compact">
-                  {" "}
-                  <span>Label layout</span>{" "}
-                  <select
-                    className="rjsf-builder__select rjsf-builder__select--compact"
-                    value={
-                      definition.builderOptions?.labelLayout === "inline"
-                        ? "inline"
-                        : "block"
-                    }
-                    onChange={(event) =>
-                      updateBuilderOptions((options) => ({
-                        ...options,
-                        labelLayout:
-                          event.target.value === "inline" ? "inline" : "block"
-                      }))
-                    }
-                  >
-                    {" "}
-                    {LABEL_LAYOUT_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {" "}
-                        {option.label}{" "}
-                      </option>
-                    ))}{" "}
-                  </select>{" "}
-                </label>{" "}
-                <label className="rjsf-builder__toolbar-field rjsf-builder__toolbar-field--compact">
-                  {" "}
-                  <span>Label width</span>{" "}
-                  <select
-                    className="rjsf-builder__select rjsf-builder__select--compact"
-                    value={String(
-                      definition.builderOptions?.labelWidth ?? ""
-                    )}
-                    onChange={(event) => {
-                      const parsed = Math.round(Number(event.target.value));
-                      updateBuilderOptions((options) => ({
-                        ...options,
-                        labelWidth:
-                          Number.isFinite(parsed) && parsed >= 2 && parsed <= 6
-                            ? parsed
-                            : undefined
-                      }));
-                    }}
-                  >
-                    {" "}
-                    <option value="">Default (fixed)</option>{" "}
-                    <option value="2">2 / 12 (narrow)</option>{" "}
-                    <option value="3">3 / 12</option>{" "}
-                    <option value="4">4 / 12</option>{" "}
-                    <option value="5">5 / 12</option>{" "}
-                    <option value="6">6 / 12 (half)</option>{" "}
-                  </select>{" "}
-                </label>{" "}
-                <label className="rjsf-builder__toolbar-field rjsf-builder__toolbar-field--compact">
-                  {" "}
-                  <span>Fill mode</span>{" "}
-                  <select
-                    className="rjsf-builder__select rjsf-builder__select--compact"
-                    value={
-                      definition.builderOptions?.fillMode === "wizard"
-                        ? "wizard"
-                        : "scroll"
-                    }
-                    onChange={(event) =>
-                      updateBuilderOptions((options) => ({
-                        ...options,
-                        fillMode:
-                          event.target.value === "wizard" ? "wizard" : "scroll"
-                      }))
-                    }
-                  >
-                    {" "}
-                    <option value="scroll">Continuous (scroll)</option>{" "}
-                    <option value="wizard">
-                      Wizard (one section per page)
-                    </option>{" "}
-                  </select>{" "}
-                </label>{" "}
+                  Form settings ▾{" "}
+                </button>{" "}
+                {formSettingsOpen ? (
+                  <div className="rjsf-builder__toolbar-settings-pop">
+                    {formDescriptionField}
+                    {formSettingsControls}
+                  </div>
+                ) : null}{" "}
               </div>
             ) : null}{" "}
             {!isViewer ? (
@@ -14105,6 +14198,13 @@ export default function FormStudioBuilder(
           </div>{" "}
         </div>
       ) : null}{" "}
+      {!isViewer && isPhoneBuilder ? (
+        <div className="rjsf-builder__phone-note">
+          {" "}
+          Editing this template needs a larger screen. Use Preview to test-fill
+          here, or open on a desktop to edit.{" "}
+        </div>
+      ) : null}{" "}
       {message ? <div className="rjsf-builder__alert">{message}</div> : null}{" "}
       {isViewer && showDocumentPreview ? (
         <div
@@ -14136,35 +14236,35 @@ export default function FormStudioBuilder(
           {showViewerComponentsPanel ? (
             <aside
               className={`rjsf-builder__panel rjsf-builder__panel--left rjsf-builder__panel--viewer-nav${
-                leftPanelCollapsed ? " is-collapsed" : ""
+                viewerNavCollapsed ? " is-collapsed" : ""
               }`}
             >
               {" "}
               <div className="rjsf-builder__panel-head">
                 {" "}
-                {!leftPanelCollapsed ? (
+                {!viewerNavCollapsed ? (
                   <div className="rjsf-builder__title">Sections</div>
                 ) : null}{" "}
                 <button
                   type="button"
                   className="rjsf-builder__panel-toggle"
                   title={
-                    leftPanelCollapsed
+                    viewerNavCollapsed
                       ? "Expand sections panel"
                       : "Collapse sections panel"
                   }
                   aria-label={
-                    leftPanelCollapsed
+                    viewerNavCollapsed
                       ? "Expand sections panel"
                       : "Collapse sections panel"
                   }
                   onClick={() => setLeftPanelCollapsed((current) => !current)}
                 >
                   {" "}
-                  {leftPanelCollapsed ? ">" : "<"}{" "}
+                  {viewerNavCollapsed ? ">" : "<"}{" "}
                 </button>{" "}
               </div>{" "}
-              {!leftPanelCollapsed ? (
+              {!viewerNavCollapsed ? (
                 <div className="rjsf-builder__block">
                   {" "}
                   {railSections.length ? (
