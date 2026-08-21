@@ -10454,11 +10454,14 @@ export default function FormStudioBuilder(
     useState<boolean>(false);
   // Responsive builder: the widget's own width drives layout adaptations
   // (viewport queries lie when the widget sits in a padded page column).
-  const rootRef = useRef<HTMLDivElement | null>(null);
+  // State-backed callback ref: viewer mode's first commits are placeholder
+  // returns WITHOUT the ref, so a mount-once effect on a plain ref would
+  // observe null forever. The state ref re-runs the effect when the real
+  // root finally mounts.
+  const [rootNode, setRootNode] = useState<HTMLDivElement | null>(null);
   const [builderWidth, setBuilderWidth] = useState<number>(0);
   useEffect(() => {
-    const node = rootRef.current;
-    if (!node || typeof ResizeObserver === "undefined") {
+    if (!rootNode || typeof ResizeObserver === "undefined") {
       return;
     }
     const observer = new ResizeObserver((entries) => {
@@ -10467,9 +10470,9 @@ export default function FormStudioBuilder(
         setBuilderWidth(width);
       }
     });
-    observer.observe(node);
+    observer.observe(rootNode);
     return () => observer.disconnect();
-  }, []);
+  }, [rootNode]);
   const isNarrowBuilder = builderWidth > 0 && builderWidth < 1140;
   const isPhoneBuilder = builderWidth > 0 && builderWidth < 620;
   // Crossing into narrow: park both side panels as icon rails (they reopen as
@@ -14012,7 +14015,7 @@ export default function FormStudioBuilder(
       className={className}
       style={rootStyle}
       tabIndex={props.tabIndex}
-      ref={rootRef}
+      ref={setRootNode}
     >
       <WidgetToasts attr={props.toastMessageAttr} />
       {" "}
