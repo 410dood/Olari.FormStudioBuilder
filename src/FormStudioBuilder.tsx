@@ -12594,11 +12594,6 @@ export default function FormStudioBuilder(
         return;
       }
       updateDefinition((current) => {
-        const section = makeUniqueSectionTitle(
-          current.components,
-          template.titlePrefix
-        );
-        const sectionOrder = nextSectionOrder(current.components);
         const key = makeUniqueKey(template.keyBase, current.components);
         const component: FormComponent = {
           id: makeId("cmp"),
@@ -12606,12 +12601,12 @@ export default function FormStudioBuilder(
           label: template.label,
           type: "systemDatagrid2",
           required: false,
-          section,
-          sectionOrder,
+          section: undefined,
+          sectionOrder: undefined,
           sectionColumns: undefined,
           sectionColumn: undefined,
-          sectionCollapsible: true,
-          sectionCollapsedByDefault: false,
+          sectionCollapsible: undefined,
+          sectionCollapsedByDefault: undefined,
           columnSpan: snapColumnSpan(
             12,
             current.builderOptions?.snapToResize !== false
