@@ -882,6 +882,7 @@ function parseSystemTemplatesConfigJson(raw?: string): {
 const DRAG_TYPE_NEW = "application/x-olari-new-field";
 const DRAG_TYPE_LAYOUT = "application/x-olari-new-layout";
 const DRAG_TYPE_SYSTEM = "application/x-olari-new-system-template";
+const DRAG_TYPE_SECTION = "application/x-olari-section";
 const DRAG_TYPE_SHARED = "application/x-olari-new-shared-field";
 const DRAG_TYPE_CLIENT = "application/x-olari-new-client-field";
 const DRAG_TYPE_COMPONENT = "application/x-olari-component";
@@ -3740,8 +3741,9 @@ function resolveSectionMeta(
     const sectionWideColumns = maxSectionColumns(targetSection);
     return {
       section: targetSection,
-      // Moving into a section means adopting its stable identity.
-      sectionId: targetSection ? clean(target.sectionId) || undefined : undefined,
+      // Moving next to a target means adopting its group identity (titled
+      // section or untitled standalone group alike).
+      sectionId: clean(target.sectionId) || undefined,
       sectionOrder: target.sectionOrder,
       sectionColumns:
         sectionWideColumns > 1 ? sectionWideColumns : target.sectionColumns,
@@ -3780,6 +3782,72 @@ function resolveSectionMeta(
 function getSectionKey(component: FormComponent): string {
   return clean(component.sectionId) || component.section || "";
 }
+/** Display order of section groups (titled sections, standalone groups, and
+ *  the shared sectionless group) — min sectionOrder, then first appearance. */
+function orderedSectionKeysOf(components: FormComponent[]): string[] {
+  const map: Record<string, { order: number; firstIndex: number }> = {};
+  components.forEach((component, index) => {
+    const key = getSectionKey(component) || "__default";
+    const order = Number.isFinite(Number(component.sectionOrder))
+      ? Number(component.sectionOrder)
+      : Number.MAX_SAFE_INTEGER;
+    if (!map[key]) {
+      map[key] = { order, firstIndex: index };
+    } else if (order < map[key].order) {
+      map[key].order = order;
+    }
+  });
+  return Object.entries(map)
+    .sort(
+      (a, b) => a[1].order - b[1].order || a[1].firstIndex - b[1].firstIndex
+    )
+    .map(([key]) => key);
+}
+/** Re-stamp every component's sectionOrder from the given group order. */
+function renumberSectionOrders(
+  components: FormComponent[],
+  orderedKeys: string[]
+): FormComponent[] {
+  const orderByKey: Record<string, number> = {};
+  orderedKeys.forEach((key, index) => {
+    orderByKey[key] = (index + 1) * 10;
+  });
+  return components.map((component) => {
+    const key = getSectionKey(component) || "__default";
+    const next = orderByKey[key];
+    return next != null && component.sectionOrder !== next
+      ? { ...component, sectionOrder: next }
+      : component;
+  });
+}
+/** Position one group before another (or at the end when beforeKey is null),
+ *  renumbering all section orders to clean integers. */
+function placeGroupBefore(
+  components: FormComponent[],
+  groupKey: string,
+  beforeKey: string | null
+): FormComponent[] {
+  const keys = orderedSectionKeysOf(components).filter(
+    (key) => key !== groupKey
+  );
+  const index = beforeKey ? keys.indexOf(beforeKey) : -1;
+  if (index >= 0) {
+    keys.splice(index, 0, groupKey);
+  } else {
+    keys.push(groupKey);
+  }
+  return renumberSectionOrders(components, keys);
+}
+type GapDropPayload =
+  | { kind: "section"; sectionKey: string }
+  | { kind: "component"; componentId: string }
+  | {
+      kind: "new";
+      fieldType: FieldType;
+      blockStylePreset?: FormComponent["blockStyle"];
+    }
+  | { kind: "system"; templateType: SystemTemplateType }
+  | { kind: "layout"; layoutType: LayoutTemplateType };
 let choiceOptionDraftId = 0;
 function createChoiceOptionDraft(
   label = "",
@@ -5257,10 +5325,10 @@ function normalizeComponent(item: any, index: number): FormComponent {
     showMaxScore:
       type === "total" && toBoolean(item?.showMaxScore) ? true : undefined,
     section: clean(item?.section) || undefined,
-    // Stable section identity only makes sense alongside a section.
-    sectionId: clean(item?.section)
-      ? clean(item?.sectionId) || undefined
-      : undefined,
+    // Keep sectionId even without a title: untitled standalone groups (e.g. a
+    // divider dropped between two sections) rely on it to stay separate from
+    // the shared sectionless group across save/reload.
+    sectionId: clean(item?.sectionId) || undefined,
     sectionOrder: Number.isFinite(Number(item?.sectionOrder))
       ? Math.floor(Number(item.sectionOrder))
       : undefined,
@@ -8061,6 +8129,10 @@ function ObjectTemplate(props: any): ReactElement {
       placement?: DropPlacement,
       sectionColumn?: number
     ) => void;
+    onPreviewGapDrop?: (
+      payload: GapDropPayload,
+      beforeSectionKey: string | null
+    ) => void;
     onPreviewMoveComponent?: (
       componentId: string,
       section: string | undefined,
@@ -8180,6 +8252,10 @@ function ObjectTemplate(props: any): ReactElement {
   const onPreviewDropSystemTemplate =
     typeof formContext.onPreviewDropSystemTemplate === "function"
       ? formContext.onPreviewDropSystemTemplate
+      : undefined;
+  const onPreviewGapDrop =
+    typeof formContext.onPreviewGapDrop === "function"
+      ? formContext.onPreviewGapDrop
       : undefined;
   const onPreviewMoveComponent =
     typeof formContext.onPreviewMoveComponent === "function"
@@ -8601,6 +8677,67 @@ function ObjectTemplate(props: any): ReactElement {
       onPreviewMoveComponent,
       onPreviewReorder
     ]
+  );
+  const handleGapZoneDrop = useCallback(
+    (event: DragEvent<HTMLElement>, beforeSectionKey: string) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setDragOverSectionKey(null);
+      setDragOverKey(null);
+      setDragOverSlot(null);
+      if (!onPreviewGapDrop) {
+        return;
+      }
+      const dt = event.dataTransfer;
+      const sectionKey = getDragData(dt, DRAG_TYPE_SECTION);
+      if (sectionKey) {
+        onPreviewGapDrop({ kind: "section", sectionKey }, beforeSectionKey);
+        return;
+      }
+      const rawNew = getDragData(dt, DRAG_TYPE_NEW);
+      if (rawNew) {
+        const [typePart, presetPart] = rawNew.split("|");
+        if (FIELD_TYPE_SET.has(typePart as FieldType)) {
+          onPreviewGapDrop(
+            {
+              kind: "new",
+              fieldType: typePart as FieldType,
+              blockStylePreset: BLOCK_STYLE_SET.has(presetPart as any)
+                ? (presetPart as FormComponent["blockStyle"])
+                : undefined
+            },
+            beforeSectionKey
+          );
+          return;
+        }
+      }
+      const systemType = getDragData(dt, DRAG_TYPE_SYSTEM);
+      if (isSystemTemplateType(systemType)) {
+        onPreviewGapDrop(
+          { kind: "system", templateType: systemType },
+          beforeSectionKey
+        );
+        return;
+      }
+      const layoutType = getDragData(dt, DRAG_TYPE_LAYOUT);
+      if (isLayoutTemplateType(layoutType)) {
+        onPreviewGapDrop(
+          { kind: "layout", layoutType },
+          beforeSectionKey
+        );
+        return;
+      }
+      const previewKey = getDragData(dt, DRAG_TYPE_PREVIEW_KEY);
+      const componentId =
+        getDragData(dt, DRAG_TYPE_COMPONENT) ||
+        (previewKey
+          ? formContext.componentMetaByKey?.[previewKey]?.id || ""
+          : "");
+      if (componentId) {
+        onPreviewGapDrop({ kind: "component", componentId }, beforeSectionKey);
+      }
+    },
+    [onPreviewGapDrop, formContext.componentMetaByKey]
   );
   const handleResizePointerDown = useCallback(
     (
@@ -9120,9 +9257,32 @@ function ObjectTemplate(props: any): ReactElement {
           isRootObjectTemplate &&
           Boolean(formContext.activeSectionKey) &&
           formContext.activeSectionKey === section.key;
+        const gapKey = `__gap__${section.key}`;
         return (
+          <Fragment key={section.key}>
+          {onPreviewGapDrop && !wizard ? (
+            <div
+              className={`rjsf-builder__gap-drop${
+                dragOverSectionKey === gapKey ? " is-active" : ""
+              }`}
+              onDragOver={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setDragOverSectionKey(gapKey);
+                setDragOverKey(null);
+                setDragOverSlot(null);
+              }}
+              onDragLeave={() =>
+                setDragOverSectionKey((current) =>
+                  current === gapKey ? null : current
+                )
+              }
+              onDrop={(event) => handleGapZoneDrop(event, section.key)}
+            >
+              {dragOverSectionKey === gapKey ? "Drop here" : null}
+            </div>
+          ) : null}
           <div
-            key={section.key}
             ref={(node) => {
               sectionRefs.current[section.key] = node;
             }}
@@ -9156,7 +9316,23 @@ function ObjectTemplate(props: any): ReactElement {
           >
             {" "}
             {section.title ? (
-              <div className="rjsf-builder__section-header">
+              <div
+                className="rjsf-builder__section-header"
+                draggable={Boolean(onPreviewGapDrop && !wizard)}
+                title={
+                  onPreviewGapDrop && !wizard
+                    ? "Drag to reorder this section"
+                    : undefined
+                }
+                onDragStart={(event) => {
+                  setDragData(
+                    event.dataTransfer,
+                    DRAG_TYPE_SECTION,
+                    section.key
+                  );
+                  event.stopPropagation();
+                }}
+              >
                 {" "}
                 <div className="rjsf-builder__section-title">
                   {" "}
@@ -9566,6 +9742,7 @@ function ObjectTemplate(props: any): ReactElement {
               </div>
             ) : null}{" "}
           </div>
+          </Fragment>
         );
       })}{" "}
       {canAcceptPreviewDrop ? (
@@ -9584,7 +9761,23 @@ function ObjectTemplate(props: any): ReactElement {
               current === "__root__" ? null : current
             )
           }
-          onDrop={(event) => handleDropOnTarget(event, undefined)}
+          onDrop={(event) => {
+            const draggedSection = getDragData(
+              event.dataTransfer,
+              DRAG_TYPE_SECTION
+            );
+            if (draggedSection && onPreviewGapDrop) {
+              event.preventDefault();
+              event.stopPropagation();
+              setDragOverSectionKey(null);
+              onPreviewGapDrop(
+                { kind: "section", sectionKey: draggedSection },
+                null
+              );
+              return;
+            }
+            handleDropOnTarget(event, undefined);
+          }}
         >
           {" "}
           Drop here to add outside any section{" "}
@@ -12503,7 +12696,7 @@ export default function FormStudioBuilder(
     []
   );
   const addLayoutTemplate = useCallback(
-    (layoutType: LayoutTemplateType) => {
+    (layoutType: LayoutTemplateType, beforeSectionKey?: string | null) => {
       const template = LAYOUT_TEMPLATES.find(
         (item) => item.type === layoutType
       );
@@ -12583,7 +12776,13 @@ export default function FormStudioBuilder(
             }
           });
           setMessage("");
-          return { ...current, components: nextComponents };
+          return {
+            ...current,
+            components:
+              beforeSectionKey !== undefined
+                ? placeGroupBefore(nextComponents, section, beforeSectionKey)
+                : nextComponents
+          };
         }
         const section = makeUniqueSectionTitle(
           current.components,
@@ -12618,13 +12817,19 @@ export default function FormStudioBuilder(
           }
         }
         setMessage("");
-        return { ...current, components: nextComponents };
+        return {
+          ...current,
+          components:
+            beforeSectionKey !== undefined
+              ? placeGroupBefore(nextComponents, section, beforeSectionKey)
+              : nextComponents
+        };
       });
     },
     [updateDefinition]
   );
   const addSystemTemplate = useCallback(
-    (templateType: SystemTemplateType) => {
+    (templateType: SystemTemplateType, beforeSectionKey?: string | null) => {
       const template = allSystemTemplates().find(
         (item) => item.type === templateType
       );
@@ -12665,13 +12870,24 @@ export default function FormStudioBuilder(
         };
         setMessage("");
         setSelectedId(component.id);
-        return { ...current, components: [...current.components, component] };
+        const next = [...current.components, component];
+        if (beforeSectionKey !== undefined) {
+          return {
+            ...current,
+            components: placeGroupBefore(next, section, beforeSectionKey)
+          };
+        }
+        return { ...current, components: next };
       });
     },
     [updateDefinition]
   );
   const addComponent = useCallback(
-    (type: FieldType, blockStylePreset?: FormComponent["blockStyle"]) => {
+    (
+      type: FieldType,
+      blockStylePreset?: FormComponent["blockStyle"],
+      beforeSectionKey?: string | null
+    ) => {
       const preset =
         type === "contentBlock" && blockStylePreset
           ? FORMATTING_PRESETS.find(
@@ -12722,6 +12938,18 @@ export default function FormStudioBuilder(
         };
         setSelectedId(component.id);
         setMessage("");
+        if (beforeSectionKey !== undefined) {
+          // Standalone group so the item can sit between two sections.
+          const gapId = makeId("sec");
+          const next = [
+            ...current.components,
+            { ...component, sectionId: gapId }
+          ];
+          return {
+            ...current,
+            components: placeGroupBefore(next, gapId, beforeSectionKey)
+          };
+        }
         return { ...current, components: [...current.components, component] };
       });
     },
@@ -13399,6 +13627,65 @@ export default function FormStudioBuilder(
       });
     },
     [updateDefinition]
+  );
+  const handlePreviewGapDrop = useCallback(
+    (payload: GapDropPayload, beforeSectionKey: string | null) => {
+      if (payload.kind === "section") {
+        updateDefinition((current) => {
+          if (payload.sectionKey === beforeSectionKey) {
+            return current;
+          }
+          return {
+            ...current,
+            components: placeGroupBefore(
+              current.components,
+              payload.sectionKey,
+              beforeSectionKey
+            )
+          };
+        });
+        return;
+      }
+      if (payload.kind === "component") {
+        updateDefinition((current) => {
+          const index = current.components.findIndex(
+            (component) => component.id === payload.componentId
+          );
+          if (index < 0) {
+            return current;
+          }
+          const gapId = makeId("sec");
+          const moved: FormComponent = {
+            ...current.components[index],
+            section: undefined,
+            sectionId: gapId,
+            sectionOrder: undefined,
+            sectionColumns: undefined,
+            sectionColumn: undefined,
+            sectionCollapsible: undefined,
+            sectionCollapsedByDefault: undefined
+          };
+          const rest = [...current.components];
+          rest.splice(index, 1);
+          rest.push(moved);
+          return {
+            ...current,
+            components: placeGroupBefore(rest, gapId, beforeSectionKey)
+          };
+        });
+        return;
+      }
+      if (payload.kind === "new") {
+        addComponent(payload.fieldType, payload.blockStylePreset, beforeSectionKey);
+        return;
+      }
+      if (payload.kind === "system") {
+        addSystemTemplate(payload.templateType, beforeSectionKey);
+        return;
+      }
+      addLayoutTemplate(payload.layoutType, beforeSectionKey);
+    },
+    [updateDefinition, addComponent, addSystemTemplate, addLayoutTemplate]
   );
   const updateSectionSettingsByPreviewKey = useCallback(
     (sectionKey: string, updates: SectionSettingsUpdate) => {
@@ -15173,6 +15460,7 @@ export default function FormStudioBuilder(
                     onPreviewMoveSection: reorderSectionByPreviewKey,
                     onPreviewDropField: addComponentInSection,
                     onPreviewDropSystemTemplate: addSystemTemplateInSection,
+                    onPreviewGapDrop: handlePreviewGapDrop,
                     onPreviewMoveComponent: moveComponentToSection,
                     onPreviewSelectKey,
                     onPreviewFieldAction,
