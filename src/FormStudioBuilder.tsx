@@ -8015,6 +8015,13 @@ function ObjectTemplate(props: any): ReactElement {
       placement?: DropPlacement,
       sectionColumn?: number
     ) => void;
+    onPreviewDropSystemTemplate?: (
+      templateType: SystemTemplateType,
+      section: string | undefined,
+      targetKey?: string,
+      placement?: DropPlacement,
+      sectionColumn?: number
+    ) => void;
     onPreviewMoveComponent?: (
       componentId: string,
       section: string | undefined,
@@ -8130,6 +8137,10 @@ function ObjectTemplate(props: any): ReactElement {
   const onPreviewDropField =
     typeof formContext.onPreviewDropField === "function"
       ? formContext.onPreviewDropField
+      : undefined;
+  const onPreviewDropSystemTemplate =
+    typeof formContext.onPreviewDropSystemTemplate === "function"
+      ? formContext.onPreviewDropSystemTemplate
       : undefined;
   const onPreviewMoveComponent =
     typeof formContext.onPreviewMoveComponent === "function"
@@ -8511,6 +8522,23 @@ function ObjectTemplate(props: any): ReactElement {
         setDragOverSectionKey(null);
         return;
       }
+      const droppedSystemTemplate = getDragData(
+        event.dataTransfer,
+        DRAG_TYPE_SYSTEM
+      );
+      if (droppedSystemTemplate && onPreviewDropSystemTemplate) {
+        onPreviewDropSystemTemplate(
+          droppedSystemTemplate,
+          section,
+          targetKey,
+          placement,
+          sectionColumn
+        );
+        setDragOverKey(null);
+        setDragOverSlot(null);
+        setDragOverSectionKey(null);
+        return;
+      }
       const componentId = getDragData(event.dataTransfer, DRAG_TYPE_COMPONENT);
       if (componentId && onPreviewMoveComponent) {
         onPreviewMoveComponent(
@@ -8528,6 +8556,7 @@ function ObjectTemplate(props: any): ReactElement {
     [
       formContext.componentMetaByKey,
       onPreviewDropField,
+      onPreviewDropSystemTemplate,
       onPreviewMoveComponent,
       onPreviewReorder
     ]
@@ -13461,6 +13490,81 @@ export default function FormStudioBuilder(
     },
     [updateDefinition]
   );
+  const addSystemTemplateInSection = useCallback(
+    (
+      templateType: SystemTemplateType,
+      section: string | undefined,
+      targetKey?: string,
+      placement: DropPlacement = "after",
+      explicitSectionColumn?: number
+    ) => {
+      const template = allSystemTemplates().find(
+        (item) => item.type === templateType
+      );
+      if (!template) {
+        return;
+      }
+      updateDefinition((current) => {
+        const key = makeUniqueKey(template.keyBase, current.components);
+        const sectionMeta = resolveSectionMeta(
+          current.components,
+          section,
+          targetKey
+        );
+        const targetComponent = targetKey
+          ? current.components.find((component) => component.key === targetKey)
+          : undefined;
+        const sectionColumn =
+          sectionMeta.sectionColumns && sectionMeta.sectionColumns > 1
+            ? clamp(
+                Math.floor(
+                  Number(
+                    explicitSectionColumn || targetComponent?.sectionColumn || 1
+                  )
+                ),
+                1,
+                sectionMeta.sectionColumns
+              )
+            : undefined;
+        const insertIndex = resolveInsertIndex(
+          current.components,
+          sectionMeta.section,
+          targetKey,
+          placement
+        );
+        const component: FormComponent = {
+          id: makeId("cmp"),
+          key,
+          label: template.label,
+          type: "systemDatagrid2",
+          required: false,
+          section: sectionMeta.section,
+          sectionId: sectionMeta.sectionId,
+          sectionOrder: sectionMeta.sectionOrder,
+          sectionColumns: sectionMeta.sectionColumns,
+          sectionColumn,
+          sectionCollapsible: sectionMeta.sectionCollapsible,
+          sectionCollapsedByDefault: sectionMeta.sectionCollapsedByDefault,
+          columnSpan: snapColumnSpan(
+            12,
+            current.builderOptions?.snapToResize !== false
+          ),
+          systemTemplateType: template.type,
+          documentOutputTemplate:
+            clean(template.documentOutputTemplate) || undefined,
+          datagridRowIdKey: clean(template.rowIdKey) || undefined,
+          systemTemplateSlotProperty: template.systemTemplateSlotProperty,
+          datagridColumns: createDataGridColumnsFromTemplate(template)
+        };
+        const next = [...current.components];
+        next.splice(insertIndex, 0, component);
+        setSelectedId(component.id);
+        setMessage("");
+        return { ...current, components: next };
+      });
+    },
+    [updateDefinition]
+  );
   const moveComponentToSection = useCallback(
     (
       componentId: string,
@@ -14948,6 +15052,7 @@ export default function FormStudioBuilder(
                     onPreviewResizeSection: resizeSectionByPreviewKey,
                     onPreviewMoveSection: reorderSectionByPreviewKey,
                     onPreviewDropField: addComponentInSection,
+                    onPreviewDropSystemTemplate: addSystemTemplateInSection,
                     onPreviewMoveComponent: moveComponentToSection,
                     onPreviewSelectKey,
                     onPreviewFieldAction,
