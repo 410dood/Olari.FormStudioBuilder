@@ -49,8 +49,6 @@ type FieldType =
   | "select"
   | "radio"
   | "yesno"
-  | "time"
-  | "datetime"
   | "contentBlock"
   | "datagrid"
   | "systemDatagrid2"
@@ -289,6 +287,12 @@ interface FormComponent {
   /** Text fields: value format. undefined = free text; "email": email
    *  validation + keyboard (absorbs the former "email" field type). */
   textFormat?: "email";
+  /** Text blocks (contentBlock): visual role. undefined = paragraph.
+   *  Divider and spacer render layout chrome and produce no document text. */
+  blockStyle?: "heading1" | "heading2" | "paragraph" | "divider" | "spacer";
+  /** Date fields: what the field captures. undefined = date only;
+   *  "time" / "datetime" absorb the former standalone field types. */
+  dateCapture?: "time" | "datetime";
   sectionSwitchEnabled?: boolean;
   multiSelect?: boolean;
   contentText?: string;
@@ -440,13 +444,11 @@ const FIELD_TYPES: Array<{ type: FieldType; label: string }> = [
   { type: "text", label: "Text input" },
   { type: "number", label: "Number" },
   { type: "checkbox", label: "Checkbox" },
-  { type: "date", label: "Date" },
+  { type: "date", label: "Date / time" },
   { type: "select", label: "Dropdown" },
   { type: "radio", label: "Radio group" },
   { type: "yesno", label: "Yes/No" },
-  { type: "time", label: "Time" },
-  { type: "datetime", label: "Date & time" },
-  { type: "contentBlock", label: "Content Block" },
+  { type: "contentBlock", label: "Text block" },
   { type: "datagrid", label: "Datagrid" },
   { type: "systemDatagrid2", label: "System Template" },
   { type: "signature", label: "Signature" },
@@ -678,7 +680,7 @@ const FIELD_PALETTE_GROUPS: Array<{
   {
     key: "basic",
     label: "Basic",
-    types: ["text", "number", "date", "time", "datetime"]
+    types: ["text", "number", "date"]
   },
   {
     key: "choice",
@@ -691,9 +693,24 @@ const FIELD_PALETTE_GROUPS: Array<{
     // "signature" removed from the palette (signatures are handled at the
     // form/document level now); the type itself stays supported so existing
     // templates with signature fields keep working.
-    types: ["contentBlock", "datagrid", "total"]
+    types: ["datagrid", "total"]
   }
 ];
+/** Word-style formatting palette: each entry is a preset over contentBlock. */
+const FORMATTING_PRESETS: Array<{
+  blockStyle: NonNullable<FormComponent["blockStyle"]>;
+  label: string;
+  defaultText: string;
+}> = [
+  { blockStyle: "heading1", label: "Heading", defaultText: "Heading" },
+  { blockStyle: "heading2", label: "Subheading", defaultText: "Subheading" },
+  { blockStyle: "paragraph", label: "Paragraph", defaultText: "" },
+  { blockStyle: "divider", label: "Divider", defaultText: "" },
+  { blockStyle: "spacer", label: "Spacer", defaultText: "" }
+];
+const BLOCK_STYLE_SET = new Set(
+  FORMATTING_PRESETS.map((preset) => preset.blockStyle)
+);
 const YES_NO_OPTIONS = ["yes", "no"];
 const YES_NO_OPTION_LABELS: Record<string, string> = {
   yes: "Yes",
@@ -1857,6 +1874,39 @@ function coerceTokenPrefillValue(
       return isWholeNumberComponent(component) ? Math.trunc(numeric) : numeric;
     }
     case "date": {
+      const capture = dateCaptureOf(component);
+      if (capture === "time") {
+        const direct = value.match(/^([01]?\d|2[0-3]):([0-5]\d)/);
+        if (direct) {
+          return `${direct[1].padStart(2, "0")}:${direct[2]}`;
+        }
+        const meridiem = value.match(
+          /^(\d{1,2}):([0-5]\d)\s*([AaPp])\.?[Mm]?/
+        );
+        if (!meridiem) {
+          return undefined;
+        }
+        let hours = Number(meridiem[1]) % 12;
+        if (meridiem[3].toLowerCase() === "p") {
+          hours += 12;
+        }
+        return `${String(hours).padStart(2, "0")}:${meridiem[2]}`;
+      }
+      if (capture === "datetime") {
+        const direct = value.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})/);
+        if (direct) {
+          return `${direct[1]} ${direct[2]}`;
+        }
+        const parsedDt = new Date(value);
+        if (Number.isNaN(parsedDt.getTime())) {
+          return undefined;
+        }
+        const monthDt = String(parsedDt.getMonth() + 1).padStart(2, "0");
+        const dayDt = String(parsedDt.getDate()).padStart(2, "0");
+        const hoursDt = String(parsedDt.getHours()).padStart(2, "0");
+        const minutesDt = String(parsedDt.getMinutes()).padStart(2, "0");
+        return `${parsedDt.getFullYear()}-${monthDt}-${dayDt} ${hoursDt}:${minutesDt}`;
+      }
       if (/^\d{4}-\d{2}-\d{2}/.test(value)) {
         return value.slice(0, 10);
       }
@@ -1867,36 +1917,6 @@ function coerceTokenPrefillValue(
       const month = String(parsed.getMonth() + 1).padStart(2, "0");
       const day = String(parsed.getDate()).padStart(2, "0");
       return `${parsed.getFullYear()}-${month}-${day}`;
-    }
-    case "time": {
-      const direct = value.match(/^([01]?\d|2[0-3]):([0-5]\d)/);
-      if (direct) {
-        return `${direct[1].padStart(2, "0")}:${direct[2]}`;
-      }
-      const meridiem = value.match(/^(\d{1,2}):([0-5]\d)\s*([AaPp])\.?[Mm]?/);
-      if (!meridiem) {
-        return undefined;
-      }
-      let hours = Number(meridiem[1]) % 12;
-      if (meridiem[3].toLowerCase() === "p") {
-        hours += 12;
-      }
-      return `${String(hours).padStart(2, "0")}:${meridiem[2]}`;
-    }
-    case "datetime": {
-      const direct = value.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})/);
-      if (direct) {
-        return `${direct[1]} ${direct[2]}`;
-      }
-      const parsed = new Date(value);
-      if (Number.isNaN(parsed.getTime())) {
-        return undefined;
-      }
-      const month = String(parsed.getMonth() + 1).padStart(2, "0");
-      const day = String(parsed.getDate()).padStart(2, "0");
-      const hours = String(parsed.getHours()).padStart(2, "0");
-      const minutes = String(parsed.getMinutes()).padStart(2, "0");
-      return `${parsed.getFullYear()}-${month}-${day} ${hours}:${minutes}`;
     }
     case "select":
     case "radio": {
@@ -2119,13 +2139,11 @@ function getComponentTokenValue(
   if (
     component.type === "yesno" ||
     component.type === "checkbox" ||
-    component.type === "time" ||
-    component.type === "date" ||
-    component.type === "datetime"
+    component.type === "date"
   ) {
     return formatValueForPrint(
       data[component.key],
-      component.type,
+      component.type === "date" ? dateCaptureOf(component) : component.type,
       component.optionLabels,
       {
         dateGranularity: component.dateGranularity,
@@ -2164,7 +2182,22 @@ function getDefaultDocumentOutputTemplate(component: FormComponent): string {
     return "";
   }
   if (component.type === "contentBlock") {
-    return str(component.contentText);
+    // Divider/spacer are form-layout chrome only; headings print bold.
+    if (
+      component.blockStyle === "divider" ||
+      component.blockStyle === "spacer"
+    ) {
+      return "";
+    }
+    const text = str(component.contentText);
+    if (
+      text &&
+      (component.blockStyle === "heading1" ||
+        component.blockStyle === "heading2")
+    ) {
+      return `{\\b ${text}}`;
+    }
+    return text;
   }
   // Default narrative mirrors the legacy PDF generator: bold label, answer
   // inline on the same line. {\b ...} is the template bold syntax handled by
@@ -2658,7 +2691,7 @@ function formatDateTimeValueForPrint(
 }
 function formatValueForPrint(
   value: unknown,
-  type?: FieldType | DataGridColumnType,
+  type?: FieldType | DataGridColumnType | "datetime",
   optionLabels?: Record<string, string>,
   temporal?: TemporalPrintOptions
 ): string {
@@ -3269,6 +3302,9 @@ function normalizeFieldType(value: unknown): FieldType {
   }
   if (raw === "switch") {
     return "checkbox";
+  }
+  if (raw === "time" || raw === "datetime") {
+    return "date";
   }
   const lower = raw.toLowerCase();
   const matched = FIELD_TYPES.find((item) => item.type.toLowerCase() === lower);
@@ -4022,6 +4058,16 @@ function resolveSliderBounds(component: FormComponent): {
   const maximum = maximumRaw < minimum ? minimum : maximumRaw;
   const multipleOf = parseOptionalPositiveNumber(component.multipleOf) ?? 1;
   return { minimum, maximum, multipleOf };
+}
+/** Date fields: what the field captures, folding the retired "time" and
+ *  "datetime" types into the unified date field. */
+function dateCaptureOf(
+  component: FormComponent
+): "date" | "time" | "datetime" {
+  if (component.type !== "date") {
+    return "date";
+  }
+  return component.dateCapture || "date";
 }
 /** Number fields: effective render style. */
 function numberStyleOf(
@@ -4868,6 +4914,11 @@ function normalizeComponent(item: any, index: number): FormComponent {
     (rawTypeString === "email" || clean(item?.textFormat) === "email")
       ? "email"
       : undefined;
+  const blockStyle: FormComponent["blockStyle"] =
+    type === "contentBlock" &&
+    BLOCK_STYLE_SET.has(clean(item?.blockStyle) as any)
+      ? (clean(item?.blockStyle) as FormComponent["blockStyle"])
+      : undefined;
   const wholeNumber =
     type === "number" &&
     (rawTypeString === "integer" || toBoolean(item?.wholeNumber));
@@ -5049,8 +5100,23 @@ function normalizeComponent(item: any, index: number): FormComponent {
       : type === "contentBlock" || type === "matrix"
       ? undefined
       : item?.defaultValue;
-  const dateGranularity: DateGranularity | undefined = (() => {
+  const dateCapture: FormComponent["dateCapture"] = (() => {
     if (type !== "date") {
+      return undefined;
+    }
+    if (rawTypeString === "time" || clean(item?.dateCapture) === "time") {
+      return "time";
+    }
+    if (
+      rawTypeString === "datetime" ||
+      clean(item?.dateCapture) === "datetime"
+    ) {
+      return "datetime";
+    }
+    return undefined; // date-only is the default; store nothing
+  })();
+  const dateGranularity: DateGranularity | undefined = (() => {
+    if (type !== "date" || dateCapture) {
       return undefined;
     }
     const raw = clean(item?.dateGranularity);
@@ -5062,14 +5128,14 @@ function normalizeComponent(item: any, index: number): FormComponent {
       : undefined; // "full" is the default; store nothing
   })();
   const dateDisplayFormat: DateDisplayFormat | undefined = (() => {
-    if (type !== "date" && type !== "datetime") {
+    if (type !== "date" || dateCapture === "time") {
       return undefined;
     }
     const raw = clean(item?.dateDisplayFormat);
     return raw === "long" || raw === "iso" ? raw : undefined; // default numeric
   })();
   const timeDisplayFormat: TimeDisplayFormat | undefined = (() => {
-    if (type !== "time" && type !== "datetime") {
+    if (type !== "date" || !dateCapture) {
       return undefined;
     }
     return clean(item?.timeDisplayFormat) === "24h" ? "24h" : undefined; // default 12h
@@ -5157,6 +5223,7 @@ function normalizeComponent(item: any, index: number): FormComponent {
     wholeNumber: wholeNumber || undefined,
     textStyle,
     textFormat,
+    blockStyle,
     sectionSwitchEnabled: toBoolean(
       item?.sectionSwitchEnabled ??
         item?.allowSectionToggle ??
@@ -5180,6 +5247,7 @@ function normalizeComponent(item: any, index: number): FormComponent {
         : undefined,
     systemTemplateSlotProperty,
     systemTemplateType,
+    dateCapture,
     dateGranularity,
     dateDisplayFormat,
     timeDisplayFormat,
@@ -5941,13 +6009,15 @@ function buildFieldSchema(component: FormComponent): JsonObject {
   const base: JsonObject = { type: "string", title };
   if (
     component.type === "date" &&
+    !component.dateCapture &&
     (!component.dateGranularity || component.dateGranularity === "full")
   ) {
     // Partial granularities (YYYY-MM, YYYY, ...) stay plain strings so ajv's
-    // "date" format validation doesn't reject them.
+    // "date" format validation doesn't reject them. Capture "datetime" stores
+    // "YYYY-MM-DD HH:mm", which no ajv format matches — leave it plain.
     base.format = "date";
   }
-  if (component.type === "time") {
+  if (dateCaptureOf(component) === "time") {
     base.format = "time";
   }
   if (component.type === "text" && component.textFormat === "email") {
@@ -6442,19 +6512,23 @@ function buildUiSchema(definition: FormDefinition): JsonObject {
       };
     }
     if (component.type === "date") {
-      fieldUi["ui:widget"] = "date";
-      if (component.dateGranularity && component.dateGranularity !== "full") {
-        fieldUi["ui:options"] = {
-          ...(fieldUi["ui:options"] || {}),
-          dateGranularity: component.dateGranularity
-        };
+      const capture = dateCaptureOf(component);
+      if (capture === "time") {
+        fieldUi["ui:widget"] = "time";
+      } else if (capture === "datetime") {
+        fieldUi["ui:widget"] = "datetime";
+      } else {
+        fieldUi["ui:widget"] = "date";
+        if (
+          component.dateGranularity &&
+          component.dateGranularity !== "full"
+        ) {
+          fieldUi["ui:options"] = {
+            ...(fieldUi["ui:options"] || {}),
+            dateGranularity: component.dateGranularity
+          };
+        }
       }
-    }
-    if (component.type === "time") {
-      fieldUi["ui:widget"] = "time";
-    }
-    if (component.type === "datetime") {
-      fieldUi["ui:widget"] = "datetime";
     }
     if (component.type === "signature") {
       fieldUi["ui:widget"] = "signatureCanvas";
@@ -6464,7 +6538,8 @@ function buildUiSchema(definition: FormDefinition): JsonObject {
       fieldUi["ui:readonly"] = true;
       fieldUi["ui:options"] = {
         ...(fieldUi["ui:options"] || {}),
-        contentText: str(component.contentText)
+        contentText: str(component.contentText),
+        blockStyle: component.blockStyle || ""
       };
     }
     const fieldClassNames = buildFieldClassNames(component);
@@ -6546,22 +6621,23 @@ function buildUiSchema(definition: FormDefinition): JsonObject {
         }
       }
       if (component.type === "date") {
-        fieldUi["ui:widget"] = "date";
-        if (
-          component.dateGranularity &&
-          component.dateGranularity !== "full"
-        ) {
-          fieldUi["ui:options"] = {
-            ...(fieldUi["ui:options"] || {}),
-            dateGranularity: component.dateGranularity
-          };
+        const capture = dateCaptureOf(component);
+        if (capture === "time") {
+          fieldUi["ui:widget"] = "time";
+        } else if (capture === "datetime") {
+          fieldUi["ui:widget"] = "datetime";
+        } else {
+          fieldUi["ui:widget"] = "date";
+          if (
+            component.dateGranularity &&
+            component.dateGranularity !== "full"
+          ) {
+            fieldUi["ui:options"] = {
+              ...(fieldUi["ui:options"] || {}),
+              dateGranularity: component.dateGranularity
+            };
+          }
         }
-      }
-      if (component.type === "time") {
-        fieldUi["ui:widget"] = "time";
-      }
-      if (component.type === "datetime") {
-        fieldUi["ui:widget"] = "datetime";
       }
       if (component.type === "signature") {
         fieldUi["ui:widget"] = "signatureCanvas";
@@ -7073,7 +7149,35 @@ function ScoreTotalWidget(props: any): ReactElement {
   );
 }
 function ContentBlockWidget(props: any): ReactElement {
-  const options = (props?.options || {}) as { contentText?: unknown };
+  const options = (props?.options || {}) as {
+    contentText?: unknown;
+    blockStyle?: unknown;
+  };
+  const blockStyle = clean(options.blockStyle);
+  if (blockStyle === "divider") {
+    return (
+      <div
+        id={props?.id}
+        className="rjsf-builder__content-block rjsf-builder__content-block--divider"
+        aria-hidden="true"
+      />
+    );
+  }
+  if (blockStyle === "spacer") {
+    return (
+      <div
+        id={props?.id}
+        className="rjsf-builder__content-block rjsf-builder__content-block--spacer"
+        aria-hidden="true"
+      />
+    );
+  }
+  const styleClass =
+    blockStyle === "heading1"
+      ? " rjsf-builder__content-block--heading1"
+      : blockStyle === "heading2"
+      ? " rjsf-builder__content-block--heading2"
+      : "";
   const formContext =
     (props?.formContext as
       | {
@@ -7096,20 +7200,27 @@ function ContentBlockWidget(props: any): ReactElement {
       return (
         <div
           id={props?.id}
-          className="rjsf-builder__content-block rjsf-builder__content-block--empty"
+          className={`rjsf-builder__content-block rjsf-builder__content-block--empty${styleClass}`}
         >
-          Content block: add text in the Properties panel.
+          {blockStyle === "heading1" || blockStyle === "heading2"
+            ? "Heading: add text in the Properties panel."
+            : "Text block: add text in the Properties panel."}
         </div>
       );
     }
-    return <div id={props?.id} className="rjsf-builder__content-block" />;
+    return (
+      <div
+        id={props?.id}
+        className={`rjsf-builder__content-block${styleClass}`}
+      />
+    );
   }
   const tokens = formContext?.contentBlockTokens || {};
   const html = asHtmlSnippet(replaceOutputTokens(contentText, tokens));
   return (
     <div
       id={props?.id}
-      className="rjsf-builder__content-block"
+      className={`rjsf-builder__content-block${styleClass}`}
       dangerouslySetInnerHTML={{ __html: html }}
     />
   );
@@ -7938,7 +8049,8 @@ function ObjectTemplate(props: any): ReactElement {
       section: string | undefined,
       targetKey?: string,
       placement?: DropPlacement,
-      sectionColumn?: number
+      sectionColumn?: number,
+      blockStylePreset?: FormComponent["blockStyle"]
     ) => void;
     onPreviewDropSystemTemplate?: (
       templateType: SystemTemplateType,
@@ -8430,17 +8542,19 @@ function ObjectTemplate(props: any): ReactElement {
           return;
         }
       }
-      const newFieldType = getDragData(
-        event.dataTransfer,
-        DRAG_TYPE_NEW
-      ) as FieldType;
+      const rawNewField = getDragData(event.dataTransfer, DRAG_TYPE_NEW);
+      const [newFieldPart, newFieldPreset] = rawNewField.split("|");
+      const newFieldType = newFieldPart as FieldType;
       if (FIELD_TYPE_SET.has(newFieldType) && onPreviewDropField) {
         onPreviewDropField(
           newFieldType,
           section,
           targetKey,
           placement,
-          sectionColumn
+          sectionColumn,
+          BLOCK_STYLE_SET.has(newFieldPreset as any)
+            ? (newFieldPreset as FormComponent["blockStyle"])
+            : undefined
         );
         setDragOverKey(null);
         setDragOverSlot(null);
@@ -12083,6 +12197,18 @@ export default function FormStudioBuilder(
       })).filter((group) => group.items.length > 0),
     [toolboxFilter]
   );
+  const filteredFormattingPresets = useMemo(
+    () =>
+      FORMATTING_PRESETS.filter((item) => {
+        if (!toolboxFilter) {
+          return true;
+        }
+        return `${item.label} formatting ${item.blockStyle}`
+          .toLowerCase()
+          .includes(toolboxFilter);
+      }),
+    [toolboxFilter]
+  );
   const updateSelectedComponent = useCallback(
     (updater: (component: FormComponent) => FormComponent) => {
       if (!selectedComponent) {
@@ -12536,14 +12662,25 @@ export default function FormStudioBuilder(
     [updateDefinition]
   );
   const addComponent = useCallback(
-    (type: FieldType) => {
+    (type: FieldType, blockStylePreset?: FormComponent["blockStyle"]) => {
+      const preset =
+        type === "contentBlock" && blockStylePreset
+          ? FORMATTING_PRESETS.find(
+              (item) => item.blockStyle === blockStylePreset
+            )
+          : undefined;
       updateDefinition((current) => {
-        const key = makeUniqueKey(type, current.components);
+        const key = makeUniqueKey(
+          preset ? preset.blockStyle.replace(/\d+$/, "") : type,
+          current.components
+        );
         const label =
           type === "total"
             ? "Total score"
+            : preset
+            ? preset.label
             : type === "contentBlock"
-            ? "Content block"
+            ? "Text block"
             : key;
         const component: FormComponent = {
           id: makeId("cmp"),
@@ -12567,8 +12704,10 @@ export default function FormStudioBuilder(
             type === "yesno" ? { ...YES_NO_OPTION_LABELS } : undefined,
           matrixRows:
             type === "matrix" ? createDefaultMatrixRows(key) : undefined,
-          contentText: type === "contentBlock" ? "" : undefined,
+          contentText:
+            type === "contentBlock" ? preset?.defaultText ?? "" : undefined,
           hideLabel: type === "contentBlock" ? true : undefined,
+          blockStyle: preset?.blockStyle,
           datagridColumns:
             type === "datagrid" ? createDefaultDataGridColumns(key) : undefined
         };
@@ -13332,15 +13471,27 @@ export default function FormStudioBuilder(
       section: string | undefined,
       targetKey?: string,
       placement: DropPlacement = "after",
-      explicitSectionColumn?: number
+      explicitSectionColumn?: number,
+      blockStylePreset?: FormComponent["blockStyle"]
     ) => {
+      const preset =
+        type === "contentBlock" && blockStylePreset
+          ? FORMATTING_PRESETS.find(
+              (item) => item.blockStyle === blockStylePreset
+            )
+          : undefined;
       updateDefinition((current) => {
-        const key = makeUniqueKey(type, current.components);
+        const key = makeUniqueKey(
+          preset ? preset.blockStyle.replace(/\d+$/, "") : type,
+          current.components
+        );
         const label =
           type === "total"
             ? "Total score"
+            : preset
+            ? preset.label
             : type === "contentBlock"
-            ? "Content block"
+            ? "Text block"
             : key;
         const sectionMeta = resolveSectionMeta(
           current.components,
@@ -13397,8 +13548,10 @@ export default function FormStudioBuilder(
             type === "yesno" ? { ...YES_NO_OPTION_LABELS } : undefined,
           matrixRows:
             type === "matrix" ? createDefaultMatrixRows(key) : undefined,
-          contentText: type === "contentBlock" ? "" : undefined,
+          contentText:
+            type === "contentBlock" ? preset?.defaultText ?? "" : undefined,
           hideLabel: type === "contentBlock" ? true : undefined,
+          blockStyle: preset?.blockStyle,
           datagridColumns:
             type === "datagrid" ? createDefaultDataGridColumns(key) : undefined
         };
@@ -13556,9 +13709,16 @@ export default function FormStudioBuilder(
   const onDropPaletteType = useCallback(
     (event: DragEvent<HTMLElement>) => {
       event.preventDefault();
-      const type = getDragData(event.dataTransfer, DRAG_TYPE_NEW) as FieldType;
+      const rawNewType = getDragData(event.dataTransfer, DRAG_TYPE_NEW);
+      const [newTypePart, newPresetPart] = rawNewType.split("|");
+      const type = newTypePart as FieldType;
       if (FIELD_TYPE_SET.has(type)) {
-        addComponent(type);
+        addComponent(
+          type,
+          BLOCK_STYLE_SET.has(newPresetPart as any)
+            ? (newPresetPart as FormComponent["blockStyle"])
+            : undefined
+        );
         return;
       }
       const layoutType = getDragData(event.dataTransfer, DRAG_TYPE_LAYOUT);
@@ -14718,6 +14878,35 @@ export default function FormStudioBuilder(
                           ))}{" "}
                         </div>
                       ))}{" "}
+                      {filteredFormattingPresets.length ? (
+                        <Fragment>
+                          {" "}
+                          <div className="rjsf-builder__subtitle">
+                            Formatting
+                          </div>{" "}
+                          {filteredFormattingPresets.map((item) => (
+                            <button
+                              key={item.blockStyle}
+                              type="button"
+                              className="rjsf-builder__button"
+                              draggable
+                              onDragStart={(event) =>
+                                setDragData(
+                                  event.dataTransfer,
+                                  DRAG_TYPE_NEW,
+                                  `contentBlock|${item.blockStyle}`
+                                )
+                              }
+                              onClick={() =>
+                                addComponent("contentBlock", item.blockStyle)
+                              }
+                            >
+                              {" "}
+                              + {item.label}{" "}
+                            </button>
+                          ))}{" "}
+                        </Fragment>
+                      ) : null}{" "}
                       {filteredSystemTemplates.length ? (
                         <Fragment>
                           {" "}
@@ -15636,6 +15825,10 @@ export default function FormStudioBuilder(
                                         nextType === "text"
                                           ? component.textFormat
                                           : undefined,
+                                      blockStyle:
+                                        nextType === "contentBlock"
+                                          ? component.blockStyle
+                                          : undefined,
                                       minLength: isTextValidationType
                                         ? component.minLength
                                         : undefined,
@@ -15715,18 +15908,23 @@ export default function FormStudioBuilder(
                                           ? component.datagridDisplay
                                           : undefined,
                                       multiSelect: nextMultiSelect,
-                                      dateGranularity:
+                                      dateCapture:
                                         nextType === "date"
+                                          ? component.dateCapture
+                                          : undefined,
+                                      dateGranularity:
+                                        nextType === "date" &&
+                                        !component.dateCapture
                                           ? component.dateGranularity
                                           : undefined,
                                       dateDisplayFormat:
-                                        nextType === "date" ||
-                                        nextType === "datetime"
+                                        nextType === "date" &&
+                                        component.dateCapture !== "time"
                                           ? component.dateDisplayFormat
                                           : undefined,
                                       timeDisplayFormat:
-                                        nextType === "time" ||
-                                        nextType === "datetime"
+                                        nextType === "date" &&
+                                        component.dateCapture
                                           ? component.timeDisplayFormat
                                           : undefined,
                                       sumSources: isTotalType
@@ -15748,12 +15946,60 @@ export default function FormStudioBuilder(
                           </select>{" "}
                         </label>
                         )}{" "}
-                        {selectedComponent.type === "date" ||
-                        selectedComponent.type === "time" ||
-                        selectedComponent.type === "datetime" ? (
+                        {selectedComponent.type === "date" ? (
                           <div className="rjsf-builder__block">
                             {" "}
-                            {selectedComponent.type === "date" ? (
+                            <label className="rjsf-builder__field">
+                              {" "}
+                              <span>Capture</span>{" "}
+                              <select
+                                className="rjsf-builder__select"
+                                value={selectedComponent.dateCapture || "date"}
+                                onChange={(event) => {
+                                  const raw = event.target.value;
+                                  const nextCapture =
+                                    raw === "time" || raw === "datetime"
+                                      ? (raw as FormComponent["dateCapture"])
+                                      : undefined;
+                                  updateDefinition((current) => ({
+                                    ...current,
+                                    components: current.components.map(
+                                      (component) =>
+                                        component.id === selectedComponent.id
+                                          ? {
+                                              ...component,
+                                              dateCapture: nextCapture,
+                                              // Stored value shape changes
+                                              // with the capture mode.
+                                              defaultValue:
+                                                nextCapture ===
+                                                component.dateCapture
+                                                  ? component.defaultValue
+                                                  : undefined,
+                                              dateGranularity: nextCapture
+                                                ? undefined
+                                                : component.dateGranularity,
+                                              dateDisplayFormat:
+                                                nextCapture === "time"
+                                                  ? undefined
+                                                  : component.dateDisplayFormat,
+                                              timeDisplayFormat: nextCapture
+                                                ? component.timeDisplayFormat
+                                                : undefined
+                                            }
+                                          : component
+                                    )
+                                  }));
+                                }}
+                              >
+                                <option value="date">Date</option>
+                                <option value="time">Time</option>
+                                <option value="datetime">
+                                  Date &amp; time
+                                </option>
+                              </select>{" "}
+                            </label>{" "}
+                            {!selectedComponent.dateCapture ? (
                               <label className="rjsf-builder__field">
                                 {" "}
                                 <span>Date detail</span>{" "}
@@ -15804,12 +16050,12 @@ export default function FormStudioBuilder(
                                 </select>{" "}
                               </label>
                             ) : null}{" "}
-                            {(selectedComponent.type === "date" &&
-                              (!selectedComponent.dateGranularity ||
-                                selectedComponent.dateGranularity === "full" ||
-                                selectedComponent.dateGranularity ===
-                                  "monthYear")) ||
-                            selectedComponent.type === "datetime" ? (
+                            {selectedComponent.dateCapture !== "time" &&
+                            (selectedComponent.dateCapture === "datetime" ||
+                              !selectedComponent.dateGranularity ||
+                              selectedComponent.dateGranularity === "full" ||
+                              selectedComponent.dateGranularity ===
+                                "monthYear") ? (
                               <label className="rjsf-builder__field">
                                 {" "}
                                 <span>Date format (documents)</span>{" "}
@@ -15849,8 +16095,7 @@ export default function FormStudioBuilder(
                                 </select>{" "}
                               </label>
                             ) : null}{" "}
-                            {selectedComponent.type === "time" ||
-                            selectedComponent.type === "datetime" ? (
+                            {selectedComponent.dateCapture ? (
                               <label className="rjsf-builder__field">
                                 {" "}
                                 <span>Time format (documents)</span>{" "}
@@ -15887,7 +16132,7 @@ export default function FormStudioBuilder(
                             ) : null}{" "}
                             <div className="rjsf-builder__help">
                               {" "}
-                              {selectedComponent.type === "datetime"
+                              {selectedComponent.dateCapture === "datetime"
                                 ? "Captures a date and a time side by side. Formats control how the answer prints in narratives and documents."
                                 : "Formats control how the answer prints in narratives and documents; the on-form input follows the browser's locale."}{" "}
                             </div>{" "}
@@ -16505,6 +16750,54 @@ export default function FormStudioBuilder(
                         {selectedComponent.type === "contentBlock" ? (
                           <div className="rjsf-builder__block">
                             {" "}
+                            <label className="rjsf-builder__field">
+                              {" "}
+                              <span>Style</span>{" "}
+                              <select
+                                className="rjsf-builder__select"
+                                value={
+                                  selectedComponent.blockStyle || "paragraph"
+                                }
+                                onChange={(event) => {
+                                  const raw = event.target.value;
+                                  const nextStyle = BLOCK_STYLE_SET.has(
+                                    raw as any
+                                  )
+                                    ? (raw as FormComponent["blockStyle"])
+                                    : undefined;
+                                  updateDefinition((current) => ({
+                                    ...current,
+                                    components: current.components.map(
+                                      (component) =>
+                                        component.id === selectedComponent.id
+                                          ? {
+                                              ...component,
+                                              blockStyle:
+                                                nextStyle === "paragraph"
+                                                  ? undefined
+                                                  : nextStyle
+                                            }
+                                          : component
+                                    )
+                                  }));
+                                }}
+                              >
+                                <option value="paragraph">Paragraph</option>
+                                <option value="heading1">Heading</option>
+                                <option value="heading2">Subheading</option>
+                                <option value="divider">Divider</option>
+                                <option value="spacer">Spacer</option>
+                              </select>{" "}
+                            </label>{" "}
+                            {selectedComponent.blockStyle === "divider" ||
+                            selectedComponent.blockStyle === "spacer" ? (
+                              <div className="rjsf-builder__help">
+                                {" "}
+                                {selectedComponent.blockStyle === "divider"
+                                  ? "Draws a horizontal rule in the form. No text, no document output."
+                                  : "Adds vertical breathing room in the form. No text, no document output."}{" "}
+                              </div>
+                            ) : (
                             <div className="rjsf-builder__field">
                               {" "}
                               <span>Content</span>{" "}
@@ -16527,13 +16820,18 @@ export default function FormStudioBuilder(
                                   }))
                                 }
                               />{" "}
-                            </div>{" "}
-                            <div className="rjsf-builder__help">
-                              {" "}
-                              Static text rendered in the form. Tokens like{" "}
-                              <code>{`{token_key}`}</code> are resolved from
-                              form and client data. This block stores no answer.{" "}
-                            </div>{" "}
+                            </div>
+                            )}{" "}
+                            {selectedComponent.blockStyle !== "divider" &&
+                            selectedComponent.blockStyle !== "spacer" ? (
+                              <div className="rjsf-builder__help">
+                                {" "}
+                                Static text rendered in the form. Tokens like{" "}
+                                <code>{`{token_key}`}</code> are resolved from
+                                form and client data. This block stores no
+                                answer.{" "}
+                              </div>
+                            ) : null}{" "}
                           </div>
                         ) : null}{" "}
                         <label className="rjsf-builder__field">
