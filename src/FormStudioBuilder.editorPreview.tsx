@@ -34,10 +34,10 @@ function resolveSlotRenderer(raw: unknown): ReactNode {
 const SYSTEM_TEMPLATE_SLOTS = [
   { key: "activeMedicationsDatagrid2", label: "Active Medications" },
   { key: "activeAllergiesDatagrid2", label: "Active Allergies" },
-  { key: "chartDiagnosisDatagrid2", label: "Chart Diagnosis" },
   { key: "billingDiagnosisDatagrid2", label: "Assessment / Diagnoses" },
   { key: "activeBillingCodesDatagrid2", label: "Plan / Billing Codes" },
-  { key: "recentDrugTestDatagrid2", label: "Most Recent Drug Test" }
+  { key: "recentDrugTestDatagrid2", label: "Most Recent Drug Test" },
+  { key: "recentVitalsDatagrid2", label: "Most Recent Vitals" }
 ] as const;
 
 export function preview(props: FormStudioBuilderPreviewProps): ReactElement {

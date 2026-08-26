@@ -36,10 +36,10 @@ type ViewMode = "designer" | "viewer";
 type SystemTemplateSlotProperty =
   | "activeMedicationsDatagrid2"
   | "activeAllergiesDatagrid2"
-  | "chartDiagnosisDatagrid2"
   | "billingDiagnosisDatagrid2"
   | "activeBillingCodesDatagrid2"
   | "recentDrugTestDatagrid2"
+  | "recentVitalsDatagrid2"
   | (string & {});
 type FieldType =
   | "text"
@@ -81,10 +81,10 @@ type LayoutTemplateType = "layout_section" | "layout_datagrid_compact";
 type SystemTemplateType =
   | "active_medications"
   | "active_allergies"
-  | "chart_diagnosis"
   | "billing_diagnosis"
   | "active_billing_codes"
   | "recent_drug_test"
+  | "recent_vitals"
   | (string & {});
 type LabelLayout = "block" | "inline";
 type VisibilityOperator =
@@ -213,10 +213,10 @@ export interface FormStudioBuilderProps {
   viewerThemePreset?: ThemePreset;
   activeMedicationsDatagrid2?: ReactNode;
   activeAllergiesDatagrid2?: ReactNode;
-  chartDiagnosisDatagrid2?: ReactNode;
   billingDiagnosisDatagrid2?: ReactNode;
   activeBillingCodesDatagrid2?: ReactNode;
   recentDrugTestDatagrid2?: ReactNode;
+  recentVitalsDatagrid2?: ReactNode;
 }
 interface VisibilityRule {
   id: string;
@@ -387,8 +387,6 @@ interface SystemTemplateDefinition {
   systemTemplateSlotProperty: SystemTemplateSlotProperty;
   documentOutputTemplate?: string;
   columns: SystemTemplateColumnDefinition[];
-  /* Kept for rendering existing placements but not offered in the palette. */
-  hiddenFromPalette?: boolean;
 }
 interface UndoSnapshot {
   definition: FormDefinition;
@@ -546,40 +544,6 @@ const SYSTEM_TEMPLATES: SystemTemplateDefinition[] = [
     ]
   },
   {
-    type: "chart_diagnosis",
-    label: "Chart Diagnosis",
-    titlePrefix: "Chart Diagnosis",
-    hiddenFromPalette: true,
-    keyBase: "chartDiagnosis",
-    systemTemplateSlotProperty: "chartDiagnosisDatagrid2",
-    datagrid2Snippet: "snippet_chart_diagnosis_datagrid2",
-    rowIdKey: "id",
-    columns: [
-      {
-        key: "diagnosisCode",
-        label: "Diagnosis code",
-        type: "text",
-        required: true,
-        columnSpan: 3
-      },
-      {
-        key: "diagnosisName",
-        label: "Diagnosis",
-        type: "text",
-        required: true,
-        columnSpan: 5
-      },
-      { key: "onsetDate", label: "Onset date", type: "date", columnSpan: 2 },
-      {
-        key: "status",
-        label: "Status",
-        type: "select",
-        columnSpan: 2,
-        options: ["Active", "Resolved", "Inactive"]
-      }
-    ]
-  },
-  {
     type: "billing_diagnosis",
     label: "Assessment / Diagnoses",
     titlePrefix: "Assessment / Diagnoses",
@@ -667,6 +631,41 @@ const SYSTEM_TEMPLATES: SystemTemplateDefinition[] = [
         options: ["Positive", "Negative", "Inconclusive"]
       }
     ]
+  },
+  {
+    type: "recent_vitals",
+    label: "Most Recent Vitals",
+    titlePrefix: "Most Recent Vitals",
+    keyBase: "mostRecentVitals",
+    systemTemplateSlotProperty: "recentVitalsDatagrid2",
+    datagrid2Snippet: "snippet_recent_vitals_datagrid2",
+    rowIdKey: "id",
+    documentOutputTemplate:
+      "{recordedDate} BP {bloodPressure}, pulse {pulse}, resp {respiration}, temp {temperature}, SpO2 {oxygenSaturation}.",
+    columns: [
+      {
+        key: "recordedDate",
+        label: "Date",
+        type: "date",
+        required: true,
+        columnSpan: 2
+      },
+      {
+        key: "bloodPressure",
+        label: "BP",
+        type: "text",
+        columnSpan: 2
+      },
+      { key: "pulse", label: "Pulse", type: "text", columnSpan: 2 },
+      { key: "respiration", label: "Resp", type: "text", columnSpan: 2 },
+      { key: "temperature", label: "Temp", type: "text", columnSpan: 2 },
+      {
+        key: "oxygenSaturation",
+        label: "SpO2",
+        type: "text",
+        columnSpan: 2
+      }
+    ]
   }
 ];
 const FIELD_PALETTE_GROUPS: Array<{
@@ -728,10 +727,10 @@ const SYSTEM_TEMPLATE_SET = new Set(SYSTEM_TEMPLATES.map((item) => item.type));
 const SYSTEM_TEMPLATE_SLOT_PROPERTIES = [
   "activeMedicationsDatagrid2",
   "activeAllergiesDatagrid2",
-  "chartDiagnosisDatagrid2",
   "billingDiagnosisDatagrid2",
   "activeBillingCodesDatagrid2",
-  "recentDrugTestDatagrid2"
+  "recentDrugTestDatagrid2",
+  "recentVitalsDatagrid2"
 ] as const;
 const SYSTEM_TEMPLATE_SLOT_PROPERTY_SET = new Set(
   SYSTEM_TEMPLATE_SLOT_PROPERTIES as readonly string[]
@@ -10534,18 +10533,18 @@ export default function FormStudioBuilder(
     () => ({
       activeMedicationsDatagrid2: props.activeMedicationsDatagrid2,
       activeAllergiesDatagrid2: props.activeAllergiesDatagrid2,
-      chartDiagnosisDatagrid2: props.chartDiagnosisDatagrid2,
       billingDiagnosisDatagrid2: props.billingDiagnosisDatagrid2,
       activeBillingCodesDatagrid2: props.activeBillingCodesDatagrid2,
-      recentDrugTestDatagrid2: props.recentDrugTestDatagrid2
+      recentDrugTestDatagrid2: props.recentDrugTestDatagrid2,
+      recentVitalsDatagrid2: props.recentVitalsDatagrid2
     }),
     [
       props.activeMedicationsDatagrid2,
       props.activeAllergiesDatagrid2,
-      props.chartDiagnosisDatagrid2,
       props.billingDiagnosisDatagrid2,
       props.activeBillingCodesDatagrid2,
-      props.recentDrugTestDatagrid2
+      props.recentDrugTestDatagrid2,
+      props.recentVitalsDatagrid2
     ]
   );
   const hasHydratedDefinitionRef = useRef<boolean>(false);
@@ -12057,9 +12056,6 @@ export default function FormStudioBuilder(
   const filteredSystemTemplates = useMemo(
     () =>
       allSystemTemplates().filter((item) => {
-        if (item.hiddenFromPalette) {
-          return false;
-        }
         if (!toolboxFilter) {
           return true;
         }
