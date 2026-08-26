@@ -6949,10 +6949,10 @@ function SystemDatagrid2PlaceholderWidget(props: any): ReactElement {
     ? createDataGridColumnsFromTemplate(template)
     : normalizeDataGridColumns(options.columns) || [];
   const widgetContent = slotRenderer ? slotRenderer() : null;
+  // In the builder there is no client in scope, so an unfilled slot is the
+  // normal state — only warn when the component has no slot mapped at all.
   const footnote = slotProperty
-    ? slotRenderer
-      ? "Configured widget renders from this system template slot."
-      : `No widget configured for slot "${slotProperty}" in widget properties.`
+    ? null
     : "No system template slot is mapped. Select one in Properties.";
 
   if (widgetContent) {
@@ -6996,9 +6996,11 @@ function SystemDatagrid2PlaceholderWidget(props: any): ReactElement {
           )}
         </div>
       </div>
-      <div className="rjsf-builder__system-template-placeholder__footnote">
-        {footnote}
-      </div>
+      {footnote ? (
+        <div className="rjsf-builder__system-template-placeholder__footnote">
+          {footnote}
+        </div>
+      ) : null}
     </div>
   );
 }
