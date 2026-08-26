@@ -3081,8 +3081,17 @@ input.rjsf-builder__num-stepper-input::-webkit-inner-spin-button {
   background: rgba(47, 111, 235, 0.08);
 }
 
-.rjsf-builder__section-header[draggable="true"] {
+.rjsf-builder__section-drag-handle {
   cursor: grab;
+  color: var(--rb-muted);
+  font-size: 13px;
+  padding: 0 6px 0 2px;
+  user-select: none;
+  flex: none;
+}
+
+.rjsf-builder__section-drag-handle:active {
+  cursor: grabbing;
 }
 
 .rjsf-builder__section-drop--root {

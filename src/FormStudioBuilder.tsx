@@ -883,6 +883,26 @@ const DRAG_TYPE_NEW = "application/x-olari-new-field";
 const DRAG_TYPE_LAYOUT = "application/x-olari-new-layout";
 const DRAG_TYPE_SYSTEM = "application/x-olari-new-system-template";
 const DRAG_TYPE_SECTION = "application/x-olari-section";
+const BUILDER_DRAG_TYPES: readonly string[] = [
+  DRAG_TYPE_SECTION,
+  "application/x-olari-new-field",
+  "application/x-olari-new-layout",
+  DRAG_TYPE_SYSTEM,
+  "application/x-olari-new-shared-field",
+  "application/x-olari-new-client-field",
+  "application/x-olari-component",
+  "application/x-olari-preview-key"
+];
+/** True when the drag originates from this builder (any known payload). */
+function hasBuilderDragType(dt: DataTransfer): boolean {
+  const types = dt?.types || [];
+  for (let i = 0; i < types.length; i += 1) {
+    if (BUILDER_DRAG_TYPES.includes(types[i])) {
+      return true;
+    }
+  }
+  return false;
+}
 const DRAG_TYPE_SHARED = "application/x-olari-new-shared-field";
 const DRAG_TYPE_CLIENT = "application/x-olari-new-client-field";
 const DRAG_TYPE_COMPONENT = "application/x-olari-component";
@@ -3783,7 +3803,9 @@ function getSectionKey(component: FormComponent): string {
   return clean(component.sectionId) || component.section || "";
 }
 /** Display order of section groups (titled sections, standalone groups, and
- *  the shared sectionless group) — min sectionOrder, then first appearance. */
+ *  the shared sectionless group) — each group ordered by its FIRST
+ *  component's sectionOrder (array index when absent), then first
+ *  appearance, mirroring the preview renderer. */
 function orderedSectionKeysOf(components: FormComponent[]): string[] {
   const map: Record<string, { order: number; firstIndex: number }> = {};
   components.forEach((component, index) => {
@@ -3803,7 +3825,9 @@ function orderedSectionKeysOf(components: FormComponent[]): string[] {
     )
     .map(([key]) => key);
 }
-/** Re-stamp every component's sectionOrder from the given group order. */
+/** Re-stamp every component's sectionOrder from the given group order.
+ *  Returns the ORIGINAL array when nothing changes, so callers can treat
+ *  identity as "no-op" and avoid dirtying the definition. */
 function renumberSectionOrders(
   components: FormComponent[],
   orderedKeys: string[]
@@ -3812,13 +3836,17 @@ function renumberSectionOrders(
   orderedKeys.forEach((key, index) => {
     orderByKey[key] = (index + 1) * 10;
   });
-  return components.map((component) => {
+  let changed = false;
+  const next = components.map((component) => {
     const key = getSectionKey(component) || "__default";
-    const next = orderByKey[key];
-    return next != null && component.sectionOrder !== next
-      ? { ...component, sectionOrder: next }
-      : component;
+    const order = orderByKey[key];
+    if (order != null && component.sectionOrder !== order) {
+      changed = true;
+      return { ...component, sectionOrder: order };
+    }
+    return component;
   });
+  return changed ? next : components;
 }
 /** Position one group before another (or at the end when beforeKey is null),
  *  renumbering all section orders to clean integers. */
@@ -3847,7 +3875,57 @@ type GapDropPayload =
       blockStylePreset?: FormComponent["blockStyle"];
     }
   | { kind: "system"; templateType: SystemTemplateType }
-  | { kind: "layout"; layoutType: LayoutTemplateType };
+  | { kind: "layout"; layoutType: LayoutTemplateType }
+  | { kind: "shared"; tokenKey: string }
+  | { kind: "client"; tokenKey: string };
+/** Every draggable thing the builder produces, as one payload. Returns null
+ *  for foreign drags (files, text) so callers can let those bubble/ignore. */
+function parseGapDragPayload(
+  dt: DataTransfer,
+  resolvePreviewKeyId?: (previewKey: string) => string | undefined
+): GapDropPayload | null {
+  const sectionKey = getDragData(dt, DRAG_TYPE_SECTION);
+  if (sectionKey) {
+    return { kind: "section", sectionKey };
+  }
+  const rawNew = getDragData(dt, DRAG_TYPE_NEW);
+  if (rawNew) {
+    const [typePart, presetPart] = rawNew.split("|");
+    if (FIELD_TYPE_SET.has(typePart as FieldType)) {
+      return {
+        kind: "new",
+        fieldType: typePart as FieldType,
+        blockStylePreset: BLOCK_STYLE_SET.has(presetPart as any)
+          ? (presetPart as FormComponent["blockStyle"])
+          : undefined
+      };
+    }
+  }
+  const systemType = getDragData(dt, DRAG_TYPE_SYSTEM);
+  if (isSystemTemplateType(systemType)) {
+    return { kind: "system", templateType: systemType };
+  }
+  const layoutType = getDragData(dt, DRAG_TYPE_LAYOUT);
+  if (isLayoutTemplateType(layoutType)) {
+    return { kind: "layout", layoutType };
+  }
+  const sharedTokenKey = getDragData(dt, DRAG_TYPE_SHARED);
+  if (sharedTokenKey) {
+    return { kind: "shared", tokenKey: sharedTokenKey };
+  }
+  const clientTokenKey = getDragData(dt, DRAG_TYPE_CLIENT);
+  if (clientTokenKey) {
+    return { kind: "client", tokenKey: clientTokenKey };
+  }
+  const previewKey = getDragData(dt, DRAG_TYPE_PREVIEW_KEY);
+  const componentId =
+    getDragData(dt, DRAG_TYPE_COMPONENT) ||
+    (previewKey ? resolvePreviewKeyId?.(previewKey) || "" : "");
+  if (componentId) {
+    return { kind: "component", componentId };
+  }
+  return null;
+}
 let choiceOptionDraftId = 0;
 function createChoiceOptionDraft(
   label = "",
@@ -7016,10 +7094,17 @@ function SystemDatagrid2PlaceholderWidget(props: any): ReactElement {
     ? createDataGridColumnsFromTemplate(template)
     : normalizeDataGridColumns(options.columns) || [];
   const widgetContent = slotRenderer ? slotRenderer() : null;
-  // In the builder there is no client in scope, so an unfilled slot is the
-  // normal state — only warn when the component has no slot mapped at all.
+  // In the BUILDER there is no client in scope, so an unfilled slot is the
+  // normal state. In the runtime viewer an unfilled slot means the Mendix
+  // page forgot to wire a widget — keep that diagnostic visible there.
+  const isDesigner = Boolean(
+    (formContext as { previewReorderEnabled?: boolean } | undefined)
+      ?.previewReorderEnabled
+  );
   const footnote = slotProperty
-    ? null
+    ? isDesigner || slotRenderer || slotHtml
+      ? null
+      : `No widget configured for slot "${slotProperty}" in widget properties.`
     : "No system template slot is mapped. Select one in Properties.";
 
   if (widgetContent) {
@@ -8679,62 +8764,23 @@ function ObjectTemplate(props: any): ReactElement {
   );
   const handleGapZoneDrop = useCallback(
     (event: DragEvent<HTMLElement>, beforeSectionKey: string) => {
-      event.preventDefault();
-      event.stopPropagation();
+      const payload = onPreviewGapDrop
+        ? parseGapDragPayload(
+            event.dataTransfer,
+            (previewKey) => formContext.componentMetaByKey?.[previewKey]?.id
+          )
+        : null;
       setDragOverSectionKey(null);
       setDragOverKey(null);
       setDragOverSlot(null);
-      if (!onPreviewGapDrop) {
+      if (!payload || !onPreviewGapDrop) {
+        // Foreign drag (file, text, ...): leave the event alone so nothing
+        // is swallowed by a zone that cannot handle it.
         return;
       }
-      const dt = event.dataTransfer;
-      const sectionKey = getDragData(dt, DRAG_TYPE_SECTION);
-      if (sectionKey) {
-        onPreviewGapDrop({ kind: "section", sectionKey }, beforeSectionKey);
-        return;
-      }
-      const rawNew = getDragData(dt, DRAG_TYPE_NEW);
-      if (rawNew) {
-        const [typePart, presetPart] = rawNew.split("|");
-        if (FIELD_TYPE_SET.has(typePart as FieldType)) {
-          onPreviewGapDrop(
-            {
-              kind: "new",
-              fieldType: typePart as FieldType,
-              blockStylePreset: BLOCK_STYLE_SET.has(presetPart as any)
-                ? (presetPart as FormComponent["blockStyle"])
-                : undefined
-            },
-            beforeSectionKey
-          );
-          return;
-        }
-      }
-      const systemType = getDragData(dt, DRAG_TYPE_SYSTEM);
-      if (isSystemTemplateType(systemType)) {
-        onPreviewGapDrop(
-          { kind: "system", templateType: systemType },
-          beforeSectionKey
-        );
-        return;
-      }
-      const layoutType = getDragData(dt, DRAG_TYPE_LAYOUT);
-      if (isLayoutTemplateType(layoutType)) {
-        onPreviewGapDrop(
-          { kind: "layout", layoutType },
-          beforeSectionKey
-        );
-        return;
-      }
-      const previewKey = getDragData(dt, DRAG_TYPE_PREVIEW_KEY);
-      const componentId =
-        getDragData(dt, DRAG_TYPE_COMPONENT) ||
-        (previewKey
-          ? formContext.componentMetaByKey?.[previewKey]?.id || ""
-          : "");
-      if (componentId) {
-        onPreviewGapDrop({ kind: "component", componentId }, beforeSectionKey);
-      }
+      event.preventDefault();
+      event.stopPropagation();
+      onPreviewGapDrop(payload, beforeSectionKey);
     },
     [onPreviewGapDrop, formContext.componentMetaByKey]
   );
@@ -9257,14 +9303,20 @@ function ObjectTemplate(props: any): ReactElement {
           Boolean(formContext.activeSectionKey) &&
           formContext.activeSectionKey === section.key;
         const gapKey = `__gap__${section.key}`;
+        const gapZonesEnabled = Boolean(
+          isRootObjectTemplate && onPreviewGapDrop && !wizard
+        );
         return (
           <Fragment key={section.key}>
-          {onPreviewGapDrop && !wizard ? (
+          {gapZonesEnabled ? (
             <div
               className={`rjsf-builder__gap-drop${
                 dragOverSectionKey === gapKey ? " is-active" : ""
               }`}
               onDragOver={(event) => {
+                if (!hasBuilderDragType(event.dataTransfer)) {
+                  return;
+                }
                 event.preventDefault();
                 event.stopPropagation();
                 setDragOverSectionKey(gapKey);
@@ -9315,24 +9367,26 @@ function ObjectTemplate(props: any): ReactElement {
           >
             {" "}
             {section.title ? (
-              <div
-                className="rjsf-builder__section-header"
-                draggable={Boolean(onPreviewGapDrop && !wizard)}
-                title={
-                  onPreviewGapDrop && !wizard
-                    ? "Drag to reorder this section"
-                    : undefined
-                }
-                onDragStart={(event) => {
-                  setDragData(
-                    event.dataTransfer,
-                    DRAG_TYPE_SECTION,
-                    section.key
-                  );
-                  event.stopPropagation();
-                }}
-              >
+              <div className="rjsf-builder__section-header">
                 {" "}
+                {gapZonesEnabled ? (
+                  <span
+                    className="rjsf-builder__section-drag-handle"
+                    draggable
+                    title="Drag to reorder this section"
+                    aria-label={`Drag to reorder section ${section.title}`}
+                    onDragStart={(event) => {
+                      setDragData(
+                        event.dataTransfer,
+                        DRAG_TYPE_SECTION,
+                        section.key
+                      );
+                      event.stopPropagation();
+                    }}
+                  >
+                    ⠿
+                  </span>
+                ) : null}{" "}
                 <div className="rjsf-builder__section-title">
                   {" "}
                   {section.title}{" "}
@@ -9732,9 +9786,20 @@ function ObjectTemplate(props: any): ReactElement {
                     current === section.key ? null : current
                   )
                 }
-                onDrop={(event) =>
-                  handleDropOnTarget(event, section.title || undefined)
-                }
+                onDrop={(event) => {
+                  // Untitled standalone groups resolve their identity via a
+                  // target component's sectionId — without a targetKey the
+                  // drop would land in the shared sectionless group instead.
+                  const lastItem = section.items[section.items.length - 1];
+                  handleDropOnTarget(
+                    event,
+                    section.title || undefined,
+                    !section.title && lastItem
+                      ? (lastItem as { previewKey?: string }).previewKey
+                      : undefined,
+                    "after"
+                  );
+                }}
               >
                 {" "}
                 Drop here to append in this section{" "}
@@ -9769,6 +9834,8 @@ function ObjectTemplate(props: any): ReactElement {
               event.preventDefault();
               event.stopPropagation();
               setDragOverSectionKey(null);
+              setDragOverKey(null);
+              setDragOverSlot(null);
               onPreviewGapDrop(
                 { kind: "section", sectionKey: draggedSection },
                 null
@@ -12818,10 +12885,11 @@ export default function FormStudioBuilder(
         setMessage("");
         return {
           ...current,
-          components:
-            beforeSectionKey !== undefined
-              ? placeGroupBefore(nextComponents, section, beforeSectionKey)
-              : nextComponents
+          components: placeGroupBefore(
+            nextComponents,
+            section,
+            beforeSectionKey ?? null
+          )
         };
       });
     },
@@ -12851,7 +12919,7 @@ export default function FormStudioBuilder(
           required: false,
           hideLabel: true,
           section,
-          sectionOrder: nextSectionOrder(current.components),
+          sectionOrder: undefined,
           sectionColumns: undefined,
           sectionColumn: undefined,
           sectionCollapsible: true,
@@ -12869,14 +12937,14 @@ export default function FormStudioBuilder(
         };
         setMessage("");
         setSelectedId(component.id);
+        // Always position via the shared renumber path: with legacy
+        // definitions where nothing carries a sectionOrder, a raw append
+        // would otherwise sort ahead of index-ordered groups.
         const next = [...current.components, component];
-        if (beforeSectionKey !== undefined) {
-          return {
-            ...current,
-            components: placeGroupBefore(next, section, beforeSectionKey)
-          };
-        }
-        return { ...current, components: next };
+        return {
+          ...current,
+          components: placeGroupBefore(next, section, beforeSectionKey ?? null)
+        };
       });
     },
     [updateDefinition]
@@ -12955,7 +13023,7 @@ export default function FormStudioBuilder(
     [updateDefinition]
   );
   const addSharedField = useCallback(
-    (entry: SharedFieldCatalogEntry) => {
+    (entry: SharedFieldCatalogEntry, beforeSectionKey?: string | null) => {
       updateDefinition((current) => {
         const existing = current.components.find(
           (component) => clean(component.sharedFieldRef) === entry.tokenKey
@@ -13022,13 +13090,24 @@ export default function FormStudioBuilder(
         };
         setSelectedId(component.id);
         setMessage("");
+        if (beforeSectionKey !== undefined) {
+          const gapId = makeId("sec");
+          const next = [
+            ...current.components,
+            { ...component, sectionId: gapId }
+          ];
+          return {
+            ...current,
+            components: placeGroupBefore(next, gapId, beforeSectionKey)
+          };
+        }
         return { ...current, components: [...current.components, component] };
       });
     },
     [updateDefinition]
   );
   const addClientField = useCallback(
-    (entry: ClientFieldCatalogEntry) => {
+    (entry: ClientFieldCatalogEntry, beforeSectionKey?: string | null) => {
       updateDefinition((current) => {
         const existing = current.components.find(
           (component) => clean(component.prefillTokenKey) === entry.tokenKey
@@ -13059,6 +13138,17 @@ export default function FormStudioBuilder(
         };
         setSelectedId(component.id);
         setMessage("");
+        if (beforeSectionKey !== undefined) {
+          const gapId = makeId("sec");
+          const next = [
+            ...current.components,
+            { ...component, sectionId: gapId }
+          ];
+          return {
+            ...current,
+            components: placeGroupBefore(next, gapId, beforeSectionKey)
+          };
+        }
         return { ...current, components: [...current.components, component] };
       });
     },
@@ -13567,125 +13657,154 @@ export default function FormStudioBuilder(
   const reorderSectionByPreviewKey = useCallback(
     (sectionKey: string, direction: SectionMoveDirection) => {
       updateDefinition((current) => {
-        type SectionEntry = { key: string; order: number; firstIndex: number };
-        const sectionMap: Record<string, SectionEntry> = {};
-        current.components.forEach((component, index) => {
-          const key = getSectionKey(component) || "__default";
-          if (sectionMap[key]) {
-            return;
-          }
-          sectionMap[key] = {
-            key,
-            // Match the preview: orderless groups sit by position, not last.
-            order: Number.isFinite(Number(component.sectionOrder))
-              ? Number(component.sectionOrder)
-              : index,
-            firstIndex: index
-          };
-        });
-        const orderedSections = Object.values(sectionMap).sort((a, b) => {
-          if (a.order !== b.order) {
-            return a.order - b.order;
-          }
-          return a.firstIndex - b.firstIndex;
-        });
-        if (orderedSections.length < 2) {
+        const keys = orderedSectionKeysOf(current.components);
+        if (keys.length < 2) {
           return current;
         }
-        const currentIndex = orderedSections.findIndex(
-          (section) => section.key === sectionKey
-        );
-        if (currentIndex < 0) {
-          return current;
-        }
+        const currentIndex = keys.indexOf(sectionKey);
         const targetIndex =
           direction === "up" ? currentIndex - 1 : currentIndex + 1;
-        if (targetIndex < 0 || targetIndex >= orderedSections.length) {
+        if (
+          currentIndex < 0 ||
+          targetIndex < 0 ||
+          targetIndex >= keys.length
+        ) {
           return current;
         }
-        const nextSections = [...orderedSections];
-        const [movingSection] = nextSections.splice(currentIndex, 1);
-        nextSections.splice(targetIndex, 0, movingSection);
-        const nextOrderBySection = nextSections.reduce(
-          (map, section, index) => {
-            map[section.key] = (index + 1) * 10;
-            return map;
-          },
-          {} as Record<string, number>
+        keys.splice(currentIndex, 1);
+        keys.splice(targetIndex, 0, sectionKey);
+        const nextComponents = renumberSectionOrders(
+          current.components,
+          keys
         );
-        let changed = false;
-        const nextComponents = current.components.map((component) => {
-          const componentSectionKey = getSectionKey(component) || "__default";
-          const nextOrder = nextOrderBySection[componentSectionKey];
-          if (component.sectionOrder === nextOrder) {
-            return component;
-          }
-          changed = true;
-          return { ...component, sectionOrder: nextOrder };
-        });
-        return changed ? { ...current, components: nextComponents } : current;
+        return nextComponents === current.components
+          ? current
+          : { ...current, components: nextComponents };
       });
     },
     [updateDefinition]
   );
   const handlePreviewGapDrop = useCallback(
     (payload: GapDropPayload, beforeSectionKey: string | null) => {
-      if (payload.kind === "section") {
-        updateDefinition((current) => {
-          if (payload.sectionKey === beforeSectionKey) {
-            return current;
-          }
-          return {
-            ...current,
-            components: placeGroupBefore(
+      switch (payload.kind) {
+        case "section":
+          updateDefinition((current) => {
+            const keys = orderedSectionKeysOf(current.components);
+            const from = keys.indexOf(payload.sectionKey);
+            // Dropping on its own gap, or the gap right below itself, is a
+            // positional no-op — don't dirty the definition.
+            if (
+              payload.sectionKey === beforeSectionKey ||
+              from < 0 ||
+              (beforeSectionKey == null
+                ? from === keys.length - 1
+                : keys[from + 1] === beforeSectionKey)
+            ) {
+              return current;
+            }
+            const next = placeGroupBefore(
               current.components,
               payload.sectionKey,
               beforeSectionKey
-            )
-          };
-        });
-        return;
-      }
-      if (payload.kind === "component") {
-        updateDefinition((current) => {
-          const index = current.components.findIndex(
-            (component) => component.id === payload.componentId
+            );
+            return next === current.components
+              ? current
+              : { ...current, components: next };
+          });
+          return;
+        case "component":
+          updateDefinition((current) => {
+            const index = current.components.findIndex(
+              (component) => component.id === payload.componentId
+            );
+            if (index < 0) {
+              return current;
+            }
+            const source = current.components[index];
+            if (source.repeatGroup?.key) {
+              // Repeat-group members live inside their grid; extracting one
+              // via a gap drop would silently corrupt the group.
+              setMessage(
+                "Data grid fields can't be moved outside their grid."
+              );
+              return current;
+            }
+            const gapId = makeId("sec");
+            const moved: FormComponent = {
+              ...source,
+              section: undefined,
+              sectionId: gapId,
+              sectionOrder: undefined,
+              sectionColumns: undefined,
+              sectionColumn: undefined,
+              sectionCollapsible: undefined,
+              sectionCollapsedByDefault: undefined
+            };
+            const rest = [...current.components];
+            rest.splice(index, 1);
+            // Keep the raw array position aligned with the visual position:
+            // narrative document output renders in array order.
+            const targetIndex = beforeSectionKey
+              ? rest.findIndex(
+                  (component) =>
+                    (getSectionKey(component) || "__default") ===
+                    beforeSectionKey
+                )
+              : -1;
+            rest.splice(
+              targetIndex >= 0 ? targetIndex : rest.length,
+              0,
+              moved
+            );
+            return {
+              ...current,
+              components: placeGroupBefore(rest, gapId, beforeSectionKey)
+            };
+          });
+          return;
+        case "new":
+          addComponent(
+            payload.fieldType,
+            payload.blockStylePreset,
+            beforeSectionKey
           );
-          if (index < 0) {
-            return current;
+          return;
+        case "system":
+          addSystemTemplate(payload.templateType, beforeSectionKey);
+          return;
+        case "layout":
+          addLayoutTemplate(payload.layoutType, beforeSectionKey);
+          return;
+        case "shared": {
+          const sharedEntry = sharedFieldCatalog.find(
+            (item) => item.tokenKey === payload.tokenKey
+          );
+          if (sharedEntry) {
+            addSharedField(sharedEntry, beforeSectionKey);
           }
-          const gapId = makeId("sec");
-          const moved: FormComponent = {
-            ...current.components[index],
-            section: undefined,
-            sectionId: gapId,
-            sectionOrder: undefined,
-            sectionColumns: undefined,
-            sectionColumn: undefined,
-            sectionCollapsible: undefined,
-            sectionCollapsedByDefault: undefined
-          };
-          const rest = [...current.components];
-          rest.splice(index, 1);
-          rest.push(moved);
-          return {
-            ...current,
-            components: placeGroupBefore(rest, gapId, beforeSectionKey)
-          };
-        });
-        return;
+          return;
+        }
+        case "client": {
+          const clientEntry = clientFieldCatalog.find(
+            (item) => item.tokenKey === payload.tokenKey
+          );
+          if (clientEntry) {
+            addClientField(clientEntry, beforeSectionKey);
+          }
+          return;
+        }
       }
-      if (payload.kind === "new") {
-        addComponent(payload.fieldType, payload.blockStylePreset, beforeSectionKey);
-        return;
-      }
-      if (payload.kind === "system") {
-        addSystemTemplate(payload.templateType, beforeSectionKey);
-        return;
-      }
-      addLayoutTemplate(payload.layoutType, beforeSectionKey);
     },
-    [updateDefinition, addComponent, addSystemTemplate, addLayoutTemplate]
+    [
+      updateDefinition,
+      addComponent,
+      addSystemTemplate,
+      addLayoutTemplate,
+      addSharedField,
+      sharedFieldCatalog,
+      addClientField,
+      clientFieldCatalog
+    ]
   );
   const updateSectionSettingsByPreviewKey = useCallback(
     (sectionKey: string, updates: SectionSettingsUpdate) => {
@@ -13750,6 +13869,13 @@ export default function FormStudioBuilder(
           return {
             ...component,
             section: nextSection,
+            // A title cleared to empty folds the group back into the shared
+            // sectionless area; keeping the id would orphan it with no
+            // header (and thus no settings/reorder controls) to manage it.
+            sectionId:
+              hasSectionTitleUpdate && !nextSection
+                ? undefined
+                : component.sectionId,
             sectionOrder: nextSectionOrder,
             sectionCollapsible: nextSectionCollapsible,
             sectionCollapsedByDefault: nextSectionCollapsedByDefault,
@@ -13908,7 +14034,8 @@ export default function FormStudioBuilder(
           label: template.label,
           type: "systemDatagrid2",
           required: false,
-          hideLabel: true,
+          // Keep the label visible here: inside someone else's section (or
+          // the sectionless area) nothing else names this grid.
           section: sectionMeta.section,
           sectionId: sectionMeta.sectionId,
           sectionOrder: sectionMeta.sectionOrder,
