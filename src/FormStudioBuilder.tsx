@@ -5457,10 +5457,9 @@ function ensureSectionIds(definition: FormDefinition): FormDefinition {
   const nextComponents = definition.components.map((component) => {
     const titleKey = resolveSectionKey(component.section);
     if (titleKey === "__default") {
-      if (clean(component.sectionId)) {
-        changed = true;
-        return { ...component, sectionId: undefined };
-      }
+      // An untitled component MAY carry a sectionId: that marks a standalone
+      // group (e.g. a divider dropped between two sections). Keep it — only
+      // titled sections get their ids managed here.
       return component;
     }
     let sectionId = idBySectionTitle[titleKey];
