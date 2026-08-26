@@ -12631,18 +12631,25 @@ export default function FormStudioBuilder(
       }
       updateDefinition((current) => {
         const key = makeUniqueKey(template.keyBase, current.components);
+        // Default placement: own titled section (rail-navigable) with the
+        // field label hidden — the section header carries the name.
+        const section = makeUniqueSectionTitle(
+          current.components,
+          template.titlePrefix
+        );
         const component: FormComponent = {
           id: makeId("cmp"),
           key,
           label: template.label,
           type: "systemDatagrid2",
           required: false,
-          section: undefined,
-          sectionOrder: undefined,
+          hideLabel: true,
+          section,
+          sectionOrder: nextSectionOrder(current.components),
           sectionColumns: undefined,
           sectionColumn: undefined,
-          sectionCollapsible: undefined,
-          sectionCollapsedByDefault: undefined,
+          sectionCollapsible: true,
+          sectionCollapsedByDefault: false,
           columnSpan: snapColumnSpan(
             12,
             current.builderOptions?.snapToResize !== false
@@ -13612,6 +13619,7 @@ export default function FormStudioBuilder(
           label: template.label,
           type: "systemDatagrid2",
           required: false,
+          hideLabel: true,
           section: sectionMeta.section,
           sectionId: sectionMeta.sectionId,
           sectionOrder: sectionMeta.sectionOrder,
