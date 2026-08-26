@@ -3788,13 +3788,13 @@ function orderedSectionKeysOf(components: FormComponent[]): string[] {
   const map: Record<string, { order: number; firstIndex: number }> = {};
   components.forEach((component, index) => {
     const key = getSectionKey(component) || "__default";
+    // Mirror the preview: a group without an explicit sectionOrder sits by
+    // its first component's position, NOT at the end.
     const order = Number.isFinite(Number(component.sectionOrder))
       ? Number(component.sectionOrder)
-      : Number.MAX_SAFE_INTEGER;
+      : index;
     if (!map[key]) {
       map[key] = { order, firstIndex: index };
-    } else if (order < map[key].order) {
-      map[key].order = order;
     }
   });
   return Object.entries(map)
@@ -13577,9 +13577,10 @@ export default function FormStudioBuilder(
           }
           sectionMap[key] = {
             key,
+            // Match the preview: orderless groups sit by position, not last.
             order: Number.isFinite(Number(component.sectionOrder))
               ? Number(component.sectionOrder)
-              : Number.MAX_SAFE_INTEGER,
+              : index,
             firstIndex: index
           };
         });
