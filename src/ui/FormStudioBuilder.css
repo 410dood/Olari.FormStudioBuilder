@@ -3030,6 +3030,12 @@ input.rjsf-builder__num-stepper-input::-webkit-inner-spin-button {
   text-align: center;
 }
 
+.rjsf-builder__section-drop--root {
+  margin-top: 12px;
+  min-height: 34px;
+  border-style: dotted;
+}
+
 .rjsf-builder__section-drop.is-active {
   border-color: var(--rb-accent);
   background: rgba(47, 111, 235, 0.08);

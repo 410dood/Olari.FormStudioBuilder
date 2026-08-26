@@ -9528,6 +9528,28 @@ function ObjectTemplate(props: any): ReactElement {
           </div>
         );
       })}{" "}
+      {canAcceptPreviewDrop ? (
+        <div
+          className={`rjsf-builder__section-drop rjsf-builder__section-drop--root${
+            dragOverSectionKey === "__root__" ? " is-active" : ""
+          }`}
+          onDragOver={(event) => {
+            event.preventDefault();
+            setDragOverSectionKey("__root__");
+            setDragOverKey(null);
+            setDragOverSlot(null);
+          }}
+          onDragLeave={() =>
+            setDragOverSectionKey((current) =>
+              current === "__root__" ? null : current
+            )
+          }
+          onDrop={(event) => handleDropOnTarget(event, undefined)}
+        >
+          {" "}
+          Drop here to add outside any section{" "}
+        </div>
+      ) : null}{" "}
       {wizard && orderedSections.length > 1 ? (
         <div className="rjsf-builder__wizard-nav">
           {" "}
