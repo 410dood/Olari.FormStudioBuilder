@@ -43,16 +43,12 @@ type SystemTemplateSlotProperty =
   | (string & {});
 type FieldType =
   | "text"
-  | "textarea"
   | "number"
-  | "integer"
   | "checkbox"
   | "date"
-  | "email"
   | "select"
   | "radio"
   | "yesno"
-  | "switch"
   | "time"
   | "datetime"
   | "contentBlock"
@@ -60,18 +56,21 @@ type FieldType =
   | "systemDatagrid2"
   | "signature"
   | "total"
-  | "matrix"
-  | "slider";
-type DataGridColumnType = Exclude<
-  FieldType,
-  | "datagrid"
-  | "signature"
-  | "total"
-  | "contentBlock"
-  | "matrix"
-  | "slider"
-  | "datetime"
->;
+  | "matrix";
+/** Datagrid columns keep their own richer type list (multiline/whole-number/
+ *  email are separate column types here, unlike top-level fields). */
+type DataGridColumnType =
+  | "text"
+  | "textarea"
+  | "number"
+  | "integer"
+  | "checkbox"
+  | "date"
+  | "time"
+  | "email"
+  | "select"
+  | "radio"
+  | "yesno";
 /** Date fields: which part of a date the field captures. */
 type DateGranularity = "full" | "monthYear" | "month" | "year" | "day";
 /** Date fields: how the captured date prints in narratives/documents. */
@@ -284,6 +283,12 @@ interface FormComponent {
   /** Number fields: restrict answers to whole numbers (absorbs the former
    *  "integer" field type). */
   wholeNumber?: boolean;
+  /** Text fields: how the input renders. undefined = single line;
+   *  "multiline": textarea (absorbs the former "textarea" field type). */
+  textStyle?: "multiline";
+  /** Text fields: value format. undefined = free text; "email": email
+   *  validation + keyboard (absorbs the former "email" field type). */
+  textFormat?: "email";
   sectionSwitchEnabled?: boolean;
   multiSelect?: boolean;
   contentText?: string;
@@ -433,15 +438,12 @@ const DEFAULT_FORM: FormDefinition = {
 const UNDO_STACK_LIMIT = 100;
 const FIELD_TYPES: Array<{ type: FieldType; label: string }> = [
   { type: "text", label: "Text input" },
-  { type: "textarea", label: "Textarea" },
   { type: "number", label: "Number" },
   { type: "checkbox", label: "Checkbox" },
   { type: "date", label: "Date" },
-  { type: "email", label: "Email" },
   { type: "select", label: "Dropdown" },
   { type: "radio", label: "Radio group" },
   { type: "yesno", label: "Yes/No" },
-  { type: "switch", label: "Switch" },
   { type: "time", label: "Time" },
   { type: "datetime", label: "Date & time" },
   { type: "contentBlock", label: "Content Block" },
@@ -676,15 +678,7 @@ const FIELD_PALETTE_GROUPS: Array<{
   {
     key: "basic",
     label: "Basic",
-    types: [
-      "text",
-      "textarea",
-      "number",
-      "date",
-      "time",
-      "datetime",
-      "email"
-    ]
+    types: ["text", "number", "date", "time", "datetime"]
   },
   {
     key: "choice",
@@ -1843,8 +1837,7 @@ function coerceTokenPrefillValue(
     return undefined;
   }
   switch (component.type) {
-    case "checkbox":
-    case "switch": {
+    case "checkbox": {
       const normalized = value.toLowerCase();
       if (["true", "yes", "y", "1", "on"].includes(normalized)) {
         return true;
@@ -1856,9 +1849,7 @@ function coerceTokenPrefillValue(
     }
     case "yesno":
       return normalizeYesNoValue(value);
-    case "number":
-    case "integer":
-    case "slider": {
+    case "number": {
       const numeric = Number(value.replace(/,/g, ""));
       if (!Number.isFinite(numeric)) {
         return undefined;
@@ -2127,7 +2118,6 @@ function getComponentTokenValue(
   }
   if (
     component.type === "yesno" ||
-    component.type === "switch" ||
     component.type === "checkbox" ||
     component.type === "time" ||
     component.type === "date" ||
@@ -2675,7 +2665,7 @@ function formatValueForPrint(
   if (value == null) {
     return "";
   }
-  if (type === "checkbox" || type === "switch") {
+  if (type === "checkbox") {
     return toBoolean(value) ? "Yes" : "No";
   }
   if (type === "yesno") {
@@ -3269,10 +3259,16 @@ function normalizeFieldType(value: unknown): FieldType {
   if (FIELD_TYPE_SET.has(raw as FieldType)) {
     return raw as FieldType;
   }
-  // Legacy types no longer offered in the palette but still valid on load;
-  // normalizeComponent folds them into "number".
+  // Legacy stored types map straight to their modern equivalents (the
+  // one-time data migration rewrites saved JSON; this is a safety net).
   if (raw === "integer" || raw === "slider") {
-    return raw as FieldType;
+    return "number";
+  }
+  if (raw === "textarea" || raw === "email") {
+    return "text";
+  }
+  if (raw === "switch") {
+    return "checkbox";
   }
   const lower = raw.toLowerCase();
   const matched = FIELD_TYPES.find((item) => item.type.toLowerCase() === lower);
@@ -3292,14 +3288,14 @@ function normalizeDataGridColumnType(value: unknown): DataGridColumnType {
   );
   return matched?.type || "text";
 }
-function defaultColumnSpan(type: FieldType): number {
+function defaultColumnSpan(type: FieldType | DataGridColumnType): number {
   if (type === "datagrid") {
     return 12;
   }
   if (type === "systemDatagrid2") {
     return 12;
   }
-  if (type === "checkbox" || type === "switch") {
+  if (type === "checkbox") {
     return 4;
   }
   if (
@@ -4027,25 +4023,18 @@ function resolveSliderBounds(component: FormComponent): {
   const multipleOf = parseOptionalPositiveNumber(component.multipleOf) ?? 1;
   return { minimum, maximum, multipleOf };
 }
-/** Number fields: effective render style, folding the legacy "slider" field
- *  type into the unified number style set. */
+/** Number fields: effective render style. */
 function numberStyleOf(
   component: FormComponent
 ): "input" | "stepper" | "slider" | "scale" {
-  if (component.type === "slider") {
-    return "slider";
-  }
   if (component.type !== "number") {
     return "input";
   }
   return component.numberStyle || "input";
 }
-/** Number fields: whole-numbers-only, folding the legacy "integer" type in. */
+/** Number fields: whole-numbers-only. */
 function isWholeNumberComponent(component: FormComponent): boolean {
-  return (
-    component.type === "integer" ||
-    (component.type === "number" && Boolean(component.wholeNumber))
-  );
+  return component.type === "number" && Boolean(component.wholeNumber);
 }
 function normalizeDataGridColumns(
   value: unknown
@@ -4270,8 +4259,6 @@ function firstArrayStringValue(value: unknown): string {
 function isSummableFieldType(type: FieldType): boolean {
   return (
     type === "number" ||
-    type === "integer" ||
-    type === "slider" ||
     type === "radio" ||
     type === "select" ||
     type === "yesno" ||
@@ -4388,10 +4375,7 @@ function buildFieldClassNames(component: FormComponent): string | undefined {
        of excluding it with datagrids/repeat groups. */
     classes.push("rjsf-builder__field--choice-multi");
   }
-  if (
-    component.type === "switch" ||
-    (component.type === "checkbox" && component.optionStyle === "switch")
-  ) {
+  if (component.type === "checkbox" && component.optionStyle === "switch") {
     classes.push("rjsf-builder__field--switch");
   }
   if (component.type === "contentBlock") {
@@ -4870,25 +4854,27 @@ function normalizeVisibility(value: any): VisibilityConfig | undefined {
   return { mode: "all", rules: [legacyRule] };
 }
 function normalizeComponent(item: any, index: number): FormComponent {
-  // "switch" merged into "checkbox" (2026-08-14): legacy switch components
-  // become checkboxes with the switch option style.
-  // "integer" and "slider" merged into "number" (2026-08-21): legacy fields
-  // become numbers with the whole-number flag / slider option style.
-  const rawType = normalizeFieldType(item?.type);
-  const isLegacySwitch = rawType === "switch";
-  const isLegacyInteger = rawType === "integer";
-  const isLegacySlider = rawType === "slider";
-  const type = isLegacySwitch
-    ? "checkbox"
-    : isLegacyInteger || isLegacySlider
-    ? "number"
-    : rawType;
+  // Retired stored types (switch, integer, slider, textarea, email) map to
+  // their modern equivalents; the raw string carries the style/format intent.
+  const rawTypeString = clean(item?.type).toLowerCase();
+  const type = normalizeFieldType(item?.type);
+  const textStyle: FormComponent["textStyle"] =
+    type === "text" &&
+    (rawTypeString === "textarea" || clean(item?.textStyle) === "multiline")
+      ? "multiline"
+      : undefined;
+  const textFormat: FormComponent["textFormat"] =
+    type === "text" &&
+    (rawTypeString === "email" || clean(item?.textFormat) === "email")
+      ? "email"
+      : undefined;
   const wholeNumber =
-    type === "number" && (isLegacyInteger || toBoolean(item?.wholeNumber));
+    type === "number" &&
+    (rawTypeString === "integer" || toBoolean(item?.wholeNumber));
   const numberStyle: FormComponent["numberStyle"] =
     type !== "number"
       ? undefined
-      : isLegacySlider || clean(item?.numberStyle) === "slider"
+      : rawTypeString === "slider" || clean(item?.numberStyle) === "slider"
       ? "slider"
       : clean(item?.numberStyle) === "stepper"
       ? "stepper"
@@ -4954,8 +4940,7 @@ function normalizeComponent(item: any, index: number): FormComponent {
           item?.maximum ?? item?.max ?? item?.maxValue
         )
       : { minimum: undefined, maximum: undefined };
-  const isTextValidationType =
-    type === "text" || type === "textarea" || type === "email";
+  const isTextValidationType = type === "text";
   const lengthBounds = isTextValidationType
     ? normalizeLengthBounds(item?.minLength, item?.maxLength)
     : { minLength: undefined, maxLength: undefined };
@@ -5154,8 +5139,7 @@ function normalizeComponent(item: any, index: number): FormComponent {
       String(item?.pattern) !== ""
         ? String(item?.pattern)
         : undefined,
-    customErrorMessage:
-      type === "text" || type === "textarea" ? customErrorMessage : undefined,
+    customErrorMessage: type === "text" ? customErrorMessage : undefined,
     hideOutputIfEmpty: toBoolean(
       item?.hideOutputIfEmpty ?? item?.outputHideIfEmpty ?? item?.hideIfEmpty
     ),
@@ -5166,11 +5150,13 @@ function normalizeComponent(item: any, index: number): FormComponent {
     optionStyle:
       clean(item?.optionStyle) === "modern"
         ? "modern"
-        : clean(item?.optionStyle) === "switch" || isLegacySwitch
+        : clean(item?.optionStyle) === "switch" || rawTypeString === "switch"
         ? "switch"
         : undefined,
     numberStyle,
     wholeNumber: wholeNumber || undefined,
+    textStyle,
+    textFormat,
     sectionSwitchEnabled: toBoolean(
       item?.sectionSwitchEnabled ??
         item?.allowSectionToggle ??
@@ -5617,14 +5603,6 @@ function sanitizeValueForComponent(
   if (component.type === "matrix") {
     return sanitizeMatrixValue(component, value);
   }
-  if (component.type === "slider") {
-    const numValue = Number(value);
-    if (!Number.isFinite(numValue)) {
-      return undefined;
-    }
-    const bounds = resolveSliderBounds(component);
-    return applyNumberBounds(numValue, bounds.minimum, bounds.maximum);
-  }
   if (component.type === "yesno") {
     return normalizeYesNoValue(value);
   }
@@ -5637,7 +5615,7 @@ function sanitizeValueForComponent(
       return first || undefined;
     }
   }
-  if (component.type === "checkbox" || component.type === "switch") {
+  if (component.type === "checkbox") {
     return toBoolean(value);
   }
   if (component.type === "number") {
@@ -5665,14 +5643,6 @@ function sanitizeValueForComponent(
     }
     const bounds = normalizeNumberBounds(component.minimum, component.maximum);
     return applyNumberBounds(numValue, bounds.minimum, bounds.maximum);
-  }
-  if (component.type === "integer") {
-    const numValue = Number(value);
-    if (!Number.isFinite(numValue)) {
-      return undefined;
-    }
-    const bounds = normalizeIntegerBounds(component.minimum, component.maximum);
-    return applyIntegerBounds(numValue, bounds.minimum, bounds.maximum);
   }
   if (component.type === "total") {
     const numValue = Number(value);
@@ -5845,22 +5815,6 @@ function buildFieldSchema(component: FormComponent): JsonObject {
     }
     return schema;
   }
-  if (component.type === "slider") {
-    const bounds = resolveSliderBounds(component);
-    const defaultValue = toNumericValue(component.defaultValue);
-    return {
-      type: "number",
-      title,
-      default:
-        defaultValue != null
-          ? applyNumberBounds(defaultValue, bounds.minimum, bounds.maximum)
-          : undefined,
-      minimum: bounds.minimum,
-      maximum: bounds.maximum,
-      multipleOf: bounds.multipleOf,
-      description: component.description || undefined
-    };
-  }
   if (component.type === "systemDatagrid2") {
     const schema: JsonObject = {
       type: "string",
@@ -5880,7 +5834,7 @@ function buildFieldSchema(component: FormComponent): JsonObject {
     }
     return schema;
   }
-  if (component.type === "checkbox" || component.type === "switch") {
+  if (component.type === "checkbox") {
     return {
       type: "boolean",
       title,
@@ -5945,25 +5899,6 @@ function buildFieldSchema(component: FormComponent): JsonObject {
       description: component.description || undefined
     };
   }
-  if (component.type === "integer") {
-    const bounds = normalizeIntegerBounds(component.minimum, component.maximum);
-    const multipleOf = parseOptionalPositiveNumber(component.multipleOf);
-    return {
-      type: "integer",
-      title,
-      default:
-        typeof component.defaultValue === "number"
-          ? applyIntegerBounds(
-              component.defaultValue,
-              bounds.minimum,
-              bounds.maximum
-            )
-          : undefined,
-      minimum: bounds.minimum,
-      maximum: bounds.maximum,
-      multipleOf
-    };
-  }
   if (component.type === "total") {
     return {
       type: "number",
@@ -6015,7 +5950,7 @@ function buildFieldSchema(component: FormComponent): JsonObject {
   if (component.type === "time") {
     base.format = "time";
   }
-  if (component.type === "email") {
+  if (component.type === "text" && component.textFormat === "email") {
     base.format = "email";
   }
   if (component.type === "select" || component.type === "radio") {
@@ -6066,18 +6001,14 @@ function coerceVisibilityRuleValue(
   if (!component) {
     return str(raw);
   }
-  if (
-    component.type === "number" ||
-    component.type === "integer" ||
-    component.type === "total"
-  ) {
+  if (component.type === "number" || component.type === "total") {
     const numeric = toNumericValue(raw);
     if (numeric != null) {
       return isWholeNumberComponent(component) ? Math.floor(numeric) : numeric;
     }
     return str(raw);
   }
-  if (component.type === "checkbox" || component.type === "switch") {
+  if (component.type === "checkbox") {
     return parseBooleanText(raw) ?? str(raw);
   }
   if (component.type === "yesno") {
@@ -6475,7 +6406,7 @@ function buildUiSchema(definition: FormDefinition): JsonObject {
     if (component.placeholder) {
       fieldUi["ui:placeholder"] = component.placeholder;
     }
-    if (component.type === "textarea") {
+    if (component.type === "text" && component.textStyle === "multiline") {
       fieldUi["ui:widget"] = "textarea";
     }
     if (component.type === "select" && component.multiSelect) {
@@ -6490,9 +6421,6 @@ function buildUiSchema(definition: FormDefinition): JsonObject {
     }
     if (component.type === "yesno") {
       fieldUi["ui:widget"] = "radio";
-    }
-    if (component.type === "slider") {
-      fieldUi["ui:widget"] = "range";
     }
     if (component.type === "number") {
       const numStyle = numberStyleOf(component);
@@ -6591,7 +6519,7 @@ function buildUiSchema(definition: FormDefinition): JsonObject {
       if (component.placeholder) {
         fieldUi["ui:placeholder"] = component.placeholder;
       }
-      if (component.type === "textarea") {
+      if (component.type === "text" && component.textStyle === "multiline") {
         fieldUi["ui:widget"] = "textarea";
       }
       if (component.type === "select" && component.multiSelect) {
@@ -6606,9 +6534,6 @@ function buildUiSchema(definition: FormDefinition): JsonObject {
       }
       if (component.type === "yesno") {
         fieldUi["ui:widget"] = "radio";
-      }
-      if (component.type === "slider") {
-        fieldUi["ui:widget"] = "range";
       }
       if (component.type === "number") {
         const numStyle = numberStyleOf(component);
@@ -8940,7 +8865,6 @@ function ObjectTemplate(props: any): ReactElement {
                     {" "}
                     {FIELD_TYPES.filter(
                       (entry) =>
-                        entry.type !== "switch" &&
                         entry.type !== "systemDatagrid2" &&
                         entry.label
                           .toLowerCase()
@@ -12351,7 +12275,7 @@ export default function FormStudioBuilder(
   const validationMessageMetaByKey = useMemo(
     () =>
       definition.components.reduce((map, component) => {
-        if (component.type !== "text" && component.type !== "textarea") {
+        if (component.type !== "text") {
           return map;
         }
         const customErrorMessage = clean(component.customErrorMessage);
@@ -12402,34 +12326,17 @@ export default function FormStudioBuilder(
       if (component.type === "matrix") {
         return sanitizeMatrixValue(component, value) || {};
       }
-      if (component.type === "slider") {
-        const numValue = Number(value);
-        const bounds = resolveSliderBounds(component);
-        return Number.isFinite(numValue)
-          ? applyNumberBounds(numValue, bounds.minimum, bounds.maximum)
-          : bounds.minimum;
-      }
       if (
         (component.type === "select" || component.type === "radio") &&
         component.multiSelect
       ) {
         return normalizeMultiSelectValues(value, component.options) || [];
       }
-      if (component.type === "checkbox" || component.type === "switch") {
+      if (component.type === "checkbox") {
         return toBoolean(value);
       }
       if (component.type === "yesno") {
         return normalizeYesNoValue(value) || "";
-      }
-      if (component.type === "integer") {
-        const numValue = Number(value);
-        const bounds = normalizeIntegerBounds(
-          component.minimum,
-          component.maximum
-        );
-        return Number.isFinite(numValue)
-          ? applyIntegerBounds(numValue, bounds.minimum, bounds.maximum)
-          : bounds.minimum ?? 0;
       }
       if (component.type === "number") {
         const numValue = Number(value);
@@ -12498,6 +12405,7 @@ export default function FormStudioBuilder(
             label: string;
             type: FieldType;
             columnSpan: number;
+            textStyle?: "multiline";
           }> = [
             {
               keyBase: "eventDate",
@@ -12514,8 +12422,9 @@ export default function FormStudioBuilder(
             {
               keyBase: "details",
               label: "Details",
-              type: "textarea",
-              columnSpan: 5
+              type: "text",
+              columnSpan: 5,
+              textStyle: "multiline"
             }
           ];
           const nextComponents = [...current.components];
@@ -12537,6 +12446,7 @@ export default function FormStudioBuilder(
                 spec.columnSpan,
                 current.builderOptions?.snapToResize !== false
               ),
+              textStyle: spec.textStyle,
               repeatGroup: groupConfig
             };
             nextComponents.push(component);
@@ -12657,9 +12567,6 @@ export default function FormStudioBuilder(
             type === "yesno" ? { ...YES_NO_OPTION_LABELS } : undefined,
           matrixRows:
             type === "matrix" ? createDefaultMatrixRows(key) : undefined,
-          minimum: type === "slider" ? 0 : undefined,
-          maximum: type === "slider" ? 10 : undefined,
-          multipleOf: type === "slider" ? 1 : undefined,
           contentText: type === "contentBlock" ? "" : undefined,
           hideLabel: type === "contentBlock" ? true : undefined,
           datagridColumns:
@@ -13490,9 +13397,6 @@ export default function FormStudioBuilder(
             type === "yesno" ? { ...YES_NO_OPTION_LABELS } : undefined,
           matrixRows:
             type === "matrix" ? createDefaultMatrixRows(key) : undefined,
-          minimum: type === "slider" ? 0 : undefined,
-          maximum: type === "slider" ? 10 : undefined,
-          multipleOf: type === "slider" ? 1 : undefined,
           contentText: type === "contentBlock" ? "" : undefined,
           hideLabel: type === "contentBlock" ? true : undefined,
           datagridColumns:
@@ -15514,6 +15418,91 @@ export default function FormStudioBuilder(
                                 )}
                               </Fragment>
                             ) : null}{" "}
+                            {selectedComponent.type === "text" ? (
+                              <Fragment>
+                                <label className="rjsf-builder__field">
+                                  {" "}
+                                  <span>Option style</span>{" "}
+                                  <select
+                                    className="rjsf-builder__select"
+                                    value={
+                                      selectedComponent.textStyle || "input"
+                                    }
+                                    onChange={(event) =>
+                                      updateDefinition((current) => ({
+                                        ...current,
+                                        components: current.components.map(
+                                          (component) => {
+                                            if (
+                                              component.id !==
+                                              selectedComponent.id
+                                            ) {
+                                              return component;
+                                            }
+                                            const nextStyle =
+                                              event.target.value === "multiline"
+                                                ? ("multiline" as const)
+                                                : undefined;
+                                            return {
+                                              ...component,
+                                              textStyle: nextStyle,
+                                              // Multi-line answers want room;
+                                              // widen a default-width field.
+                                              columnSpan:
+                                                nextStyle &&
+                                                (component.columnSpan || 6) < 12
+                                                  ? 12
+                                                  : component.columnSpan
+                                            };
+                                          }
+                                        )
+                                      }))
+                                    }
+                                  >
+                                    {" "}
+                                    <option value="input">
+                                      Single line (standard)
+                                    </option>{" "}
+                                    <option value="multiline">
+                                      Multi-line (textarea)
+                                    </option>{" "}
+                                  </select>{" "}
+                                </label>
+                                <label className="rjsf-builder__field">
+                                  {" "}
+                                  <span>Format</span>{" "}
+                                  <select
+                                    className="rjsf-builder__select"
+                                    value={
+                                      selectedComponent.textFormat || "none"
+                                    }
+                                    onChange={(event) =>
+                                      updateDefinition((current) => ({
+                                        ...current,
+                                        components: current.components.map(
+                                          (component) =>
+                                            component.id ===
+                                            selectedComponent.id
+                                              ? {
+                                                  ...component,
+                                                  textFormat:
+                                                    event.target.value ===
+                                                    "email"
+                                                      ? "email"
+                                                      : undefined
+                                                }
+                                              : component
+                                        )
+                                      }))
+                                    }
+                                  >
+                                    {" "}
+                                    <option value="none">Free text</option>{" "}
+                                    <option value="email">Email</option>{" "}
+                                  </select>{" "}
+                                </label>
+                              </Fragment>
+                            ) : null}{" "}
                           </div>
                         ) : null}{" "}
                         {selectedComponentSharedEntry ? null : (
@@ -15567,13 +15556,9 @@ export default function FormStudioBuilder(
                                     const isYesNoType = nextType === "yesno";
                                     const isMatrixType = nextType === "matrix";
                                     const isNumericType =
-                                      nextType === "integer" ||
-                                      nextType === "number" ||
-                                      nextType === "slider";
+                                      nextType === "number";
                                     const isTextValidationType =
-                                      nextType === "text" ||
-                                      nextType === "textarea" ||
-                                      nextType === "email";
+                                      nextType === "text";
                                     const nextMultiSelect =
                                       nextType === "select" ||
                                       nextType === "radio"
@@ -15642,6 +15627,14 @@ export default function FormStudioBuilder(
                                       wholeNumber:
                                         nextType === "number"
                                           ? component.wholeNumber
+                                          : undefined,
+                                      textStyle:
+                                        nextType === "text"
+                                          ? component.textStyle
+                                          : undefined,
+                                      textFormat:
+                                        nextType === "text"
+                                          ? component.textFormat
                                           : undefined,
                                       minLength: isTextValidationType
                                         ? component.minLength
@@ -15746,9 +15739,7 @@ export default function FormStudioBuilder(
                             }}
                           >
                             {" "}
-                            {FIELD_TYPES.filter(
-                              (item) => item.type !== "switch"
-                            ).map((item) => (
+                            {FIELD_TYPES.map((item) => (
                               <option key={item.type} value={item.type}>
                                 {" "}
                                 {item.label}{" "}
@@ -17428,9 +17419,7 @@ export default function FormStudioBuilder(
                         <div className="rjsf-builder__subtitle">
                           Validation
                         </div>{" "}
-                        {selectedComponent.type === "integer" ||
-                        selectedComponent.type === "number" ||
-                        selectedComponent.type === "slider" ? (
+                        {selectedComponent.type === "number" ? (
                           <Fragment>
                             {" "}
                             <div className="rjsf-builder__split">
@@ -17611,9 +17600,7 @@ export default function FormStudioBuilder(
                             </label>{" "}
                           </Fragment>
                         ) : null}{" "}
-                        {selectedComponent.type === "text" ||
-                        selectedComponent.type === "textarea" ||
-                        selectedComponent.type === "email" ? (
+                        {selectedComponent.type === "text" ? (
                           <Fragment>
                             {" "}
                             <div className="rjsf-builder__split">
@@ -17734,8 +17721,7 @@ export default function FormStudioBuilder(
                                 }
                               />{" "}
                             </label>{" "}
-                            {selectedComponent.type === "text" ||
-                            selectedComponent.type === "textarea" ? (
+                            {selectedComponent.type === "text" ? (
                               <label className="rjsf-builder__field">
                                 {" "}
                                 <span className="rjsf-builder__toggle-label">
@@ -17779,12 +17765,8 @@ export default function FormStudioBuilder(
                             ) : null}{" "}
                           </Fragment>
                         ) : null}{" "}
-                        {selectedComponent.type !== "integer" &&
-                        selectedComponent.type !== "number" &&
-                        selectedComponent.type !== "slider" &&
-                        selectedComponent.type !== "text" &&
-                        selectedComponent.type !== "textarea" &&
-                        selectedComponent.type !== "email" ? (
+                        {selectedComponent.type !== "number" &&
+                        selectedComponent.type !== "text" ? (
                           <div className="rjsf-builder__help">
                             {" "}
                             No additional validation options for this field
