@@ -387,6 +387,8 @@ interface SystemTemplateDefinition {
   systemTemplateSlotProperty: SystemTemplateSlotProperty;
   documentOutputTemplate?: string;
   columns: SystemTemplateColumnDefinition[];
+  /* Kept for rendering existing placements but not offered in the palette. */
+  hiddenFromPalette?: boolean;
 }
 interface UndoSnapshot {
   definition: FormDefinition;
@@ -547,6 +549,7 @@ const SYSTEM_TEMPLATES: SystemTemplateDefinition[] = [
     type: "chart_diagnosis",
     label: "Chart Diagnosis",
     titlePrefix: "Chart Diagnosis",
+    hiddenFromPalette: true,
     keyBase: "chartDiagnosis",
     systemTemplateSlotProperty: "chartDiagnosisDatagrid2",
     datagrid2Snippet: "snippet_chart_diagnosis_datagrid2",
@@ -578,8 +581,8 @@ const SYSTEM_TEMPLATES: SystemTemplateDefinition[] = [
   },
   {
     type: "billing_diagnosis",
-    label: "Billing Diagnosis",
-    titlePrefix: "Billing Diagnosis",
+    label: "Assessment / Diagnoses",
+    titlePrefix: "Assessment / Diagnoses",
     keyBase: "billingDiagnosis",
     systemTemplateSlotProperty: "billingDiagnosisDatagrid2",
     datagrid2Snippet: "snippet_billing_diagnosis_datagrid2",
@@ -605,8 +608,8 @@ const SYSTEM_TEMPLATES: SystemTemplateDefinition[] = [
   },
   {
     type: "active_billing_codes",
-    label: "Active Billing Codes",
-    titlePrefix: "Active Billing Codes",
+    label: "Plan / Billing Codes",
+    titlePrefix: "Plan / Billing Codes",
     keyBase: "activeBillingCodes",
     systemTemplateSlotProperty: "activeBillingCodesDatagrid2",
     datagrid2Snippet: "snippet_active_billing_codes_datagrid2",
@@ -6945,12 +6948,6 @@ function SystemDatagrid2PlaceholderWidget(props: any): ReactElement {
   const columns = template
     ? createDataGridColumnsFromTemplate(template)
     : normalizeDataGridColumns(options.columns) || [];
-  const label =
-    clean(options.systemTemplateLabel) || template?.label || "System Template";
-  const typeLabel = clean(options.systemTemplateType)
-    ? `Template: ${clean(options.systemTemplateType)}`
-    : "System template";
-  const rowIdKey = clean(options.rowIdKey) || template?.rowIdKey || "";
   const widgetContent = slotRenderer ? slotRenderer() : null;
   const footnote = slotProperty
     ? slotRenderer
@@ -6961,13 +6958,6 @@ function SystemDatagrid2PlaceholderWidget(props: any): ReactElement {
   if (widgetContent) {
     return (
       <div id={props?.id} className="rjsf-builder__system-template-placeholder">
-        <div className="rjsf-builder__system-template-placeholder__title">
-          {label}
-        </div>
-        <div className="rjsf-builder__system-template-placeholder__meta">
-          {typeLabel}
-          {rowIdKey ? ` | Row ID: ${rowIdKey}` : ""}
-        </div>
         <div className="rjsf-builder__system-template-placeholder__widget">
           {widgetContent}
         </div>
@@ -6978,13 +6968,6 @@ function SystemDatagrid2PlaceholderWidget(props: any): ReactElement {
   if (slotHtml) {
     return (
       <div id={props?.id} className="rjsf-builder__system-template-placeholder">
-        <div className="rjsf-builder__system-template-placeholder__title">
-          {label}
-        </div>
-        <div className="rjsf-builder__system-template-placeholder__meta">
-          {typeLabel}
-          {rowIdKey ? ` | Row ID: ${rowIdKey}` : ""}
-        </div>
         <div
           className="rjsf-builder__system-template-placeholder__widget"
           dangerouslySetInnerHTML={{ __html: slotHtml }}
@@ -6995,13 +6978,6 @@ function SystemDatagrid2PlaceholderWidget(props: any): ReactElement {
 
   return (
     <div id={props?.id} className="rjsf-builder__system-template-placeholder">
-      <div className="rjsf-builder__system-template-placeholder__title">
-        {label}
-      </div>
-      <div className="rjsf-builder__system-template-placeholder__meta">
-        {typeLabel}
-        {rowIdKey ? ` | Row ID: ${rowIdKey}` : ""}
-      </div>
       <div className="rjsf-builder__system-template-placeholder__grid">
         {columns.length ? (
           <div className="rjsf-builder__system-template-placeholder__row rjsf-builder__system-template-placeholder__row--header">
@@ -12081,6 +12057,9 @@ export default function FormStudioBuilder(
   const filteredSystemTemplates = useMemo(
     () =>
       allSystemTemplates().filter((item) => {
+        if (item.hiddenFromPalette) {
+          return false;
+        }
         if (!toolboxFilter) {
           return true;
         }

@@ -298,15 +298,15 @@
         </property>
 
         <property key="billingDiagnosisDatagrid2" type="widgets" required="false">
-            <caption>Billing Diagnosis Datagrid2</caption>
+            <caption>Assessment / Diagnoses Datagrid2</caption>
             <category>System templates</category>
-            <description>Mendix widget for Billing Diagnosis system template placeholder.</description>
+            <description>Mendix widget for Assessment / Diagnoses system template placeholder.</description>
         </property>
 
         <property key="activeBillingCodesDatagrid2" type="widgets" required="false">
-            <caption>Active Billing Codes Datagrid2</caption>
+            <caption>Plan / Billing Codes Datagrid2</caption>
             <category>System templates</category>
-            <description>Mendix widget for Active Billing Codes system template placeholder.</description>
+            <description>Mendix widget for Plan / Billing Codes system template placeholder.</description>
         </property>
 
         <property key="recentDrugTestDatagrid2" type="widgets" required="false">

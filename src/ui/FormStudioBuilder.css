@@ -1769,7 +1769,8 @@ input.rjsf-builder__num-stepper-input::-webkit-inner-spin-button {
 }
 
 .rjsf-builder__panel--left .rjsf-builder__palette .rjsf-builder__button--ghost {
-  justify-content: center;
+  justify-content: flex-start;
+  text-align: left;
 }
 
 .rjsf-builder__components .rjsf-builder__component {
