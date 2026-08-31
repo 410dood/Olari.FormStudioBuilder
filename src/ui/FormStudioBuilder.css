@@ -4511,3 +4511,22 @@ details.rjsf-builder__group[open] .rjsf-builder__group-chev { transform: rotate(
 .rjsf-builder__choice-grid-row.is-drag-over {
   box-shadow: inset 0 2px 0 var(--rb-accent);
 }
+
+/* Widget-native page rail (2026-08-31). While the widget rail is live
+   (.fsb-live on the sections card), hide the page-rendered legacy rail
+   list and the jsRailScroll-injected jump button so nothing duplicates.
+   !important: this file rides the aggregate widgets.css cascade. */
+.fs-rail-sections.fsb-live .fs-doc-rail-list:not(.fsb-rail) {
+    display: none !important;
+}
+.fs-rail-sections.fsb-live .fs-jumpreq:not(.fsb-jumpreq) {
+    display: none !important;
+}
+.fsb-rail .fs-rail-item {
+    user-select: none;
+}
+/* Guard against leftover page JS (jsRailScroll) inline-hiding the widget
+   rail's group lists while both mechanisms coexist. */
+.fsb-rail .fs-rail-groups {
+    display: grid !important;
+}

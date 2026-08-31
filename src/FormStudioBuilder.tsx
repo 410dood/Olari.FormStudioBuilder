@@ -10723,6 +10723,286 @@ function SignatureImageView({
   );
 }
 
+/* ------------------------------------------------------------------ */
+/* Widget-native page section rail (2026-08-31). Replaces the page-JS
+   jsRailScroll snippet: each viewer instance publishes its section
+   summary to this module-level bus, and the elected host instance
+   portals the rail UI into the page's `.fs-rail-card.fs-rail-sections`
+   container. The rail emits the legacy fs-rail-* classes so the theme
+   SCSS (desktop rail + phone chip strip + :has() jump reveal) applies
+   unchanged. The widget CSS hides the page-rendered legacy list while
+   the widget rail is live (`.fsb-live`). */
+interface FsRailGroupRow {
+  key: string;
+  title: string;
+  total: number;
+  done: number;
+}
+interface FsRailEntry {
+  id: string;
+  label: string;
+  getElement: () => HTMLElement | null;
+  groups: FsRailGroupRow[];
+  activeGroupKey: string;
+  reqTotal: number;
+  reqDone: number;
+  hasMissingRequired: boolean;
+  scrollToSelf: () => void;
+  scrollToGroup: (key: string) => void;
+  jumpToFirstMissing: () => void;
+}
+const fsRailBus = {
+  entries: new Map<string, FsRailEntry>(),
+  listeners: new Set<() => void>(),
+  hostId: null as string | null,
+  publish(entry: FsRailEntry): void {
+    this.entries.set(entry.id, entry);
+    this.emit();
+  },
+  remove(id: string): void {
+    if (this.entries.delete(id)) {
+      this.emit();
+    }
+  },
+  emit(): void {
+    this.listeners.forEach((listener) => {
+      try {
+        listener();
+      } catch {
+        /* a broken listener must not break the rest */
+      }
+    });
+  },
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  },
+  claimHost(id: string): boolean {
+    if (this.hostId === null || !this.entries.has(this.hostId)) {
+      this.hostId = id;
+    }
+    return this.hostId === id;
+  },
+  releaseHost(id: string): void {
+    if (this.hostId === id) {
+      this.hostId = null;
+      this.emit();
+    }
+  },
+  ordered(): FsRailEntry[] {
+    return Array.from(this.entries.values()).sort((a, b) => {
+      const elementA = a.getElement();
+      const elementB = b.getElement();
+    if (!elementA || !elementB) {
+        return elementA ? -1 : elementB ? 1 : 0;
+      }
+      return elementA.compareDocumentPosition(elementB) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+        ? -1
+        : 1;
+    });
+  }
+};
+function fsRailBarBucket(total: number, done: number): string {
+  if (total <= 0 || done <= 0) {
+    return "fs-bar-none";
+  }
+  if (done >= total) {
+    return "fs-bar-full";
+  }
+  return done / total >= 0.5 ? "fs-bar-most" : "fs-bar-some";
+}
+function FsPageRail({ instanceId }: { instanceId: string }): ReactElement | null {
+  const [, forceRender] = useState(0);
+  const [isHost, setIsHost] = useState(false);
+  const [container, setContainer] = useState<HTMLElement | null>(null);
+  // Recent rail click wins the active highlight while its smooth scroll is
+  // in flight (the observers report every intermediate section otherwise).
+  const [clicked, setClicked] = useState<{
+    section: string;
+    group: string;
+    until: number;
+  } | null>(null);
+  const lastActiveRef = useRef<string>("");
+  useEffect(() => {
+    const update = (): void => {
+      setIsHost(fsRailBus.claimHost(instanceId));
+      forceRender((value) => value + 1);
+    };
+    update();
+    const unsubscribe = fsRailBus.subscribe(update);
+    return () => {
+      unsubscribe();
+      fsRailBus.releaseHost(instanceId);
+    };
+  }, [instanceId]);
+  useEffect(() => {
+    if (!clicked) {
+      return;
+    }
+    const timer = window.setTimeout(
+      () => setClicked(null),
+      Math.max(0, clicked.until - Date.now())
+    );
+    return () => window.clearTimeout(timer);
+  }, [clicked]);
+  useEffect(() => {
+    if (!isHost) {
+      return;
+    }
+    const card =
+      document.querySelector<HTMLElement>(
+        ".fs-doc-rail .fs-rail-card.fs-rail-sections"
+      ) || document.querySelector<HTMLElement>(".fs-doc-rail");
+    if (!card) {
+      return;
+    }
+    const host = document.createElement("div");
+    host.className = "fs-doc-rail-list fsb-rail";
+    card.appendChild(host);
+    card.classList.add("fsb-live");
+    setContainer(host);
+    return () => {
+      card.classList.remove("fsb-live");
+      host.remove();
+      setContainer(null);
+    };
+  }, [isHost]);
+  if (!isHost || !container) {
+    return null;
+  }
+  const entries = fsRailBus.ordered();
+  if (!entries.length) {
+    return null;
+  }
+  const clickActive =
+    clicked && Date.now() < clicked.until ? clicked : null;
+  let activeId = clickActive ? clickActive.section : "";
+  if (!activeId) {
+    const reporting = entries.find((entry) => entry.activeGroupKey);
+    activeId = reporting ? reporting.id : "";
+  }
+  if (
+    !activeId &&
+    lastActiveRef.current &&
+    entries.some((entry) => entry.id === lastActiveRef.current)
+  ) {
+    activeId = lastActiveRef.current;
+  }
+  if (!activeId && entries.length === 1) {
+    activeId = entries[0].id;
+  }
+  if (activeId) {
+    lastActiveRef.current = activeId;
+  }
+  const jumpEntry = entries.find((entry) => entry.hasMissingRequired);
+  const activateSection = (entry: FsRailEntry): void => {
+    setClicked({ section: entry.id, group: "", until: Date.now() + 1500 });
+    entry.scrollToSelf();
+  };
+  return createPortal(
+    <Fragment>
+      {jumpEntry ? (
+        <button
+          type="button"
+          className="fs-jumpreq fsb-jumpreq"
+          onClick={() => jumpEntry.jumpToFirstMissing()}
+        >
+          Jump to next required
+        </button>
+      ) : null}
+      <ul>
+        {entries.map((entry, index) => {
+          const stateClass =
+            entry.reqTotal <= 0
+              ? "fs-rail-none"
+              : entry.reqDone >= entry.reqTotal
+              ? "fs-rail-done"
+              : "fs-rail-todo";
+          const isActive = entry.id === activeId;
+          return (
+            <li key={entry.id}>
+              <div
+                role="button"
+                tabIndex={0}
+                className={`fs-rail-item fs-rail-idx-${index + 1} ${stateClass}${
+                  isActive ? " is-active" : ""
+                }`}
+                onClick={() => activateSection(entry)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    activateSection(entry);
+                  }
+                }}
+              >
+                <span className="fs-rail-name">{entry.label}</span>
+                <span className="fs-rail-count">
+                  {entry.reqTotal > 0
+                    ? `${entry.reqDone}/${entry.reqTotal}`
+                    : ""}
+                </span>
+                <span className="fs-rail-bar">
+                  <span
+                    className={`fs-rail-bar-fill ${fsRailBarBucket(
+                      entry.reqTotal,
+                      entry.reqDone
+                    )}`}
+                  />
+                </span>
+              </div>
+              {isActive && entry.groups.length ? (
+                <ul className="fs-rail-groups">
+                  {entry.groups.map((group) => {
+                    const groupActive = clickActive
+                      ? clickActive.section === entry.id &&
+                        clickActive.group === group.key
+                      : entry.activeGroupKey === group.key;
+                    const groupState =
+                      group.total > 0
+                        ? group.done >= group.total
+                          ? " fs-grp-done"
+                          : " fs-grp-todo"
+                        : "";
+                    return (
+                      <li key={group.key}>
+                        <button
+                          type="button"
+                          className={`fs-rail-group${
+                            groupActive ? " is-active" : ""
+                          }${groupState}`}
+                          onClick={() => {
+                            setClicked({
+                              section: entry.id,
+                              group: group.key,
+                              until: Date.now() + 1200
+                            });
+                            entry.scrollToGroup(group.key);
+                          }}
+                        >
+                          <span className="fs-grp-name">{group.title}</span>
+                          <span className="fs-grp-count">
+                            {group.total > 0
+                              ? `${group.done}/${group.total}`
+                              : ""}
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+    </Fragment>,
+    container
+  );
+}
+
 export default function FormStudioBuilder(
   props: FormStudioBuilderProps
 ): ReactElement {
@@ -14390,6 +14670,69 @@ export default function FormStudioBuilder(
       ),
     [viewerSectionSummaries, sectionSwitchableByKey, sectionVisibilityByKey]
   );
+  // Publish this instance's rail data to the page rail bus (viewer only).
+  // The elected host instance renders the page rail from these entries.
+  useEffect(() => {
+    if (!isViewer) {
+      return;
+    }
+    let reqTotal = 0;
+    let reqDone = 0;
+    railSections.forEach((section) => {
+      reqTotal += section.requiredCount;
+      reqDone += section.requiredCompleteCount;
+    });
+    fsRailBus.publish({
+      id: instanceIdPrefix,
+      label: definition.title || "Section",
+      getElement: () => {
+        const element = viewerFillRef.current;
+        // Scroll/order against the ListView row so the section header card
+        // above the viewer stays in view after a rail jump.
+        return element ? (element.closest("li") as HTMLElement) || element : null;
+      },
+      groups: railSections
+        .filter(
+          (section) => section.name && section.name !== "Unsectioned"
+        )
+        .map((section) => ({
+          key: section.key,
+          title: section.name,
+          total: section.requiredCount,
+          done: section.requiredCompleteCount
+        })),
+      activeGroupKey: activeViewerSectionKey || "",
+      reqTotal,
+      reqDone,
+      hasMissingRequired: Boolean(firstMissingRequired),
+      scrollToSelf: () => {
+        suppressActiveUntilRef.current = Date.now() + 1000;
+        const element = viewerFillRef.current;
+        const row = element
+          ? (element.closest("li") as HTMLElement) || element
+          : null;
+        row?.scrollIntoView({ behavior: "smooth", block: "start" });
+      },
+      scrollToGroup: (key: string) => {
+        suppressActiveUntilRef.current = Date.now() + 1000;
+        scrollPreviewToSection(key);
+      },
+      jumpToFirstMissing: jumpToNextRequired
+    });
+  }, [
+    isViewer,
+    instanceIdPrefix,
+    definition.title,
+    railSections,
+    activeViewerSectionKey,
+    firstMissingRequired,
+    scrollPreviewToSection,
+    jumpToNextRequired
+  ]);
+  useEffect(
+    () => () => fsRailBus.remove(instanceIdPrefix),
+    [instanceIdPrefix]
+  );
   const layoutColumns = [
     showLeftPanel ? (leftPanelCollapsed ? "42px" : "minmax(220px, 280px)") : "",
     showPreviewPanel ? "minmax(460px, 1fr)" : "",
@@ -14927,6 +15270,7 @@ export default function FormStudioBuilder(
             </aside>
           ) : null}{" "}
           <div className="rjsf-builder__viewer" ref={viewerFillRef}>
+            {isViewer ? <FsPageRail instanceId={instanceIdPrefix} /> : null}
             {/* in-viewer "Jump to next required" bar removed 2026-08-12: the
                 FormStudio editor page renders its own jump button in the
                 Sections panel, so this one was a duplicate (Bill request). */}
