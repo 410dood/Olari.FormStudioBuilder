@@ -14395,7 +14395,16 @@ export default function FormStudioBuilder(
         }
         const remaining = [...current.components];
         remaining.splice(sourceIndex, 1);
-        const sectionMeta = resolveSectionMeta(remaining, section, targetKey);
+        // Resolve the target section's settings from the FULL list: when the
+        // moving component is the only member of that section (e.g. dragging
+        // the sole field from column 1 to column 3), "remaining" holds no
+        // trace of the section's column count and the section collapsed back
+        // to one column (fix 2026-09-04).
+        const sectionMeta = resolveSectionMeta(
+          current.components,
+          section,
+          targetKey
+        );
         const targetComponent = targetKey
           ? remaining.find((component) => component.key === targetKey)
           : undefined;

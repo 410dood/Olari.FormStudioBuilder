@@ -3146,10 +3146,19 @@ input.rjsf-builder__num-stepper-input::-webkit-inner-spin-button {
   color: var(--rb-accent-strong);
 }
 
+/* Hide the per-column drop zones only where nothing can be dropped (runtime
+   viewer, full Preview tab). NOT in .rjsf-builder__panel--preview: that is the
+   designer's live canvas, and hiding the zones there left empty columns with
+   no drop target at all (2026-09-04, Robin: "can't drag into column 3"). The
+   canvas already omits the zones when drops are not accepted. */
 .rjsf-builder__viewer .rjsf-builder__column-drop,
-.rjsf-builder__panel--preview .rjsf-builder__column-drop,
 .rjsf-builder__panel--preview-full .rjsf-builder__column-drop {
   display: none;
+}
+
+/* Give an empty column a visible body so the lane reads as a target. */
+.rjsf-builder__panel--preview .rjsf-builder__column-content:empty {
+  min-height: 36px;
 }
 
 .rjsf-builder__section-off-note {
