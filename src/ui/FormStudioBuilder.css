@@ -2217,6 +2217,26 @@ input.rjsf-builder__num-stepper-input::-webkit-inner-spin-button {
   outline-offset: 2px;
 }
 
+/* Pill geometry (2026-09-04, Bill: "these look kinda goofy"): multi-select
+   pills were still stacked full-width by the boxed-card column rule above,
+   and radio pills were content-sized so Yes/No came out different widths.
+   Flow both as a wrapping row of equal-width pills. !important on the flex
+   basics because the legacy RjsfFormBuilder bundle lands later in the
+   aggregated widgets.css. */
+.form-group.rjsf-builder__field--opt-modern.rjsf-builder__field--choice-multi .checkboxes {
+  flex-direction: row !important;
+  flex-wrap: wrap !important;
+  gap: 8px;
+}
+
+.form-group.rjsf-builder__field--opt-modern.rjsf-builder__field--choice-multi .checkboxes > .checkbox,
+.form-group.rjsf-builder__field--opt-modern .field-radio-group > .radio {
+  flex: 1 1 0 !important;
+  min-width: 96px;
+  max-width: 260px;
+  margin: 0 !important;
+}
+
 /* In inline label flow, modern boxed cards flow as a wrapping row like the
    segmented radio pills, instead of the block-layout column stack. */
 .rjsf-builder__object--labels-inline .form-group.rjsf-builder__field--opt-modern:not(.rjsf-builder__field-label-block) .checkboxes,

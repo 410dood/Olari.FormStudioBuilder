@@ -1221,6 +1221,34 @@ function resolveComponentSectionKey(component: {
 }): string {
   return clean(component.sectionId) || resolveSectionKey(component.section);
 }
+/** Components in the order the editor shows them: grouped by section, sections
+ *  sorted by sectionOrder (array index for unsectioned components, mirroring the
+ *  editor's default-section placement), ties by first appearance, and array
+ *  order inside each section. The document output/PDF must follow this order,
+ *  not the raw component array (fix 2026-09-04: system sections were printed
+ *  wherever they sat in the array, splitting the main section in two). */
+function orderComponentsBySection<T extends FormComponent>(components: T[]): T[] {
+  const groups = new Map<
+    string,
+    { order: number; firstIndex: number; items: T[] }
+  >();
+  components.forEach((component, index) => {
+    const key = resolveComponentSectionKey(component);
+    const order = Number.isFinite(Number(component.sectionOrder))
+      ? Math.floor(Number(component.sectionOrder))
+      : index;
+    const group = groups.get(key);
+    if (!group) {
+      groups.set(key, { order, firstIndex: index, items: [component] });
+      return;
+    }
+    group.items.push(component);
+    group.order = Math.min(group.order, order);
+  });
+  return Array.from(groups.values())
+    .sort((a, b) => a.order - b.order || a.firstIndex - b.firstIndex)
+    .flatMap((group) => group.items);
+}
 function resolveLabelLayoutOverride(value: unknown): LabelLayout | undefined {
   const normalized = clean(value).toLowerCase();
   if (normalized === "inline") {
@@ -2526,7 +2554,7 @@ function resolveDocumentOutputHtml(
   const componentsByKey = new Map(
     definition.components.map((component) => [component.key, component])
   );
-  const snippets = definition.components
+  const snippets = orderComponentsBySection(definition.components)
     .map((component) => {
       const perAnswerTemplate = getPerAnswerOutputTemplate(component, data);
       if (perAnswerTemplate != null && !clean(perAnswerTemplate)) {
@@ -5165,12 +5193,15 @@ function normalizeComponent(item: any, index: number): FormComponent {
     type === "yesno"
       ? { ...YES_NO_OPTION_LABELS, ...(parsedOptions.optionLabels || {}) }
       : parsedOptions.optionLabels;
+  // Multi-select choice fields keep their scores too: the calculated-total
+  // engine sums every selected option's score (fix 2026-09-04 - scores on a
+  // multi-select radio group were dropped on every load, so they never
+  // survived Save/Publish).
   const optionScores =
-    (type === "select" ||
-      type === "radio" ||
-      type === "yesno" ||
-      type === "matrix") &&
-    !multiSelect
+    type === "select" ||
+    type === "radio" ||
+    type === "yesno" ||
+    type === "matrix"
       ? parsedOptions.optionScores
       : undefined;
   const matrixRows =
