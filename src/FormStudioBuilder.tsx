@@ -2275,6 +2275,9 @@ function getDefaultDocumentOutputTemplate(component: FormComponent): string {
       ? `${labelToken}\n${rowTemplate}`
       : `${labelToken} {${component.key}}`;
   }
+  if (component.type === "total") {
+    return `${labelToken} {${component.key}_display}`;
+  }
   return `${labelToken} {${component.key}}`;
 }
 function getEffectiveDocumentOutputTemplate(component: FormComponent): string {
@@ -2372,13 +2375,30 @@ function buildFormTokenValues(
       `${component.key}_label`,
       stripTrailingColon(component.label || component.key)
     );
-    if (component.type === "total" && component.scoreBands?.length) {
+    if (component.type === "total") {
       const numericTotal = toNumericValue(data[component.key]) ?? 0;
+      const bandLabel = component.scoreBands?.length
+        ? resolveScoreBandLabel(component.scoreBands, numericTotal)
+        : "";
+      const maxScore = component.showMaxScore
+        ? calculateComponentMaxScore(component, definition.components)
+        : undefined;
+      addToken(tokens, `${component.key}_band`, bandLabel);
       addToken(
         tokens,
-        `${component.key}_band`,
-        resolveScoreBandLabel(component.scoreBands, numericTotal)
+        `${component.key}_max`,
+        maxScore != null ? String(maxScore) : ""
       );
+      // Mirrors the live ScoreTotalWidget: "21 / 35 – Severe". Preview,
+      // Lock and PDF all print through this token, so the interpretation no
+      // longer vanishes once the form leaves edit mode.
+      const displayParts = [
+        maxScore != null ? `${value || 0} / ${maxScore}` : value || "0"
+      ];
+      if (bandLabel) {
+        displayParts.push(bandLabel);
+      }
+      addToken(tokens, `${component.key}_display`, displayParts.join(" – "));
     }
     if (component.type === "matrix") {
       const rows = getMatrixRows(component);
