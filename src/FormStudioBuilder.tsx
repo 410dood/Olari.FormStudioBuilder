@@ -6656,7 +6656,7 @@ function buildUiSchema(definition: FormDefinition): JsonObject {
       fieldUi["ui:widget"] = "textarea";
     }
     if (component.type === "select" && component.multiSelect) {
-      fieldUi["ui:widget"] = "select";
+      fieldUi["ui:widget"] = "multiSelectDropdown";
       fieldUi["ui:options"] = {
         ...(fieldUi["ui:options"] || {}),
         multiple: true
@@ -6774,7 +6774,7 @@ function buildUiSchema(definition: FormDefinition): JsonObject {
         fieldUi["ui:widget"] = "textarea";
       }
       if (component.type === "select" && component.multiSelect) {
-        fieldUi["ui:widget"] = "select";
+        fieldUi["ui:widget"] = "multiSelectDropdown";
         fieldUi["ui:options"] = {
           ...(fieldUi["ui:options"] || {}),
           multiple: true
@@ -7493,6 +7493,143 @@ function NumberStepperWidget(props: any): ReactElement {
       >
         +
       </button>
+    </div>
+  );
+}
+/** Multi-select dropdown: a combobox-style trigger (looks like the single
+ *  select) that opens a popover of checkboxes. Replaces the browser's native
+ *  <select multiple> listbox, which looked nothing like the single-select
+ *  dropdown and needed ctrl-click to pick more than one option. Value stays a
+ *  string[] so answers, scoring and print output are unchanged. */
+function MultiSelectDropdownWidget(props: any): ReactElement {
+  const { onChange } = props;
+  const disabled = Boolean(props?.disabled || props?.readonly);
+  const enumOptions: Array<{ value: unknown; label: string }> = Array.isArray(
+    props?.options?.enumOptions
+  )
+    ? props.options.enumOptions
+    : [];
+  const selected: unknown[] = Array.isArray(props?.value) ? props.value : [];
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const onPointerDown = (event: PointerEvent): void => {
+      const root = rootRef.current;
+      if (root && event.target instanceof Node && root.contains(event.target)) {
+        return;
+      }
+      setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [open]);
+  useEffect(() => {
+    if (disabled) {
+      setOpen(false);
+    }
+  }, [disabled]);
+  const isSelected = (value: unknown): boolean =>
+    selected.some((entry) => String(entry) === String(value));
+  const toggle = (value: unknown): void => {
+    // Emit in option order so the stored array is stable regardless of the
+    // click order (keeps answer diffs and prefill comparisons quiet).
+    const next = enumOptions
+      .map((option) => option.value)
+      .filter((optionValue) =>
+        String(optionValue) === String(value)
+          ? !isSelected(optionValue)
+          : isSelected(optionValue)
+      );
+    onChange(next.length ? next : undefined);
+  };
+  const summary = enumOptions
+    .filter((option) => isSelected(option.value))
+    .map((option) => option.label);
+  const placeholder = props?.placeholder || props?.options?.placeholder || "";
+  const listId = `${props?.id || "msd"}__list`;
+  return (
+    <div
+      ref={rootRef}
+      className={`rjsf-builder__msd${open ? " rjsf-builder__msd--open" : ""}`}
+    >
+      <button
+        type="button"
+        id={props.id}
+        className={`form-control rjsf-builder__msd-trigger${
+          summary.length ? "" : " rjsf-builder__msd-trigger--empty"
+        }`}
+        disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={listId}
+        aria-label={props?.label || "Select options"}
+        onClick={() => setOpen((current) => !current)}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown" && !open) {
+            event.preventDefault();
+            setOpen(true);
+          }
+        }}
+      >
+        <span className="rjsf-builder__msd-summary">
+          {summary.length ? summary.join(", ") : placeholder || "Select\u2026"}
+        </span>
+        {summary.length > 1 ? (
+          <span className="rjsf-builder__msd-count">{summary.length}</span>
+        ) : null}
+        <span className="rjsf-builder__msd-chevron" aria-hidden="true" />
+      </button>
+      {open ? (
+        <div
+          id={listId}
+          role="listbox"
+          aria-multiselectable="true"
+          className="rjsf-builder__msd-menu"
+        >
+          {enumOptions.length ? (
+            enumOptions.map((option, index) => {
+              const checked = isSelected(option.value);
+              const optionId = `${props?.id || "msd"}__opt-${index}`;
+              return (
+                <label
+                  key={`${String(option.value)}-${index}`}
+                  htmlFor={optionId}
+                  role="option"
+                  aria-selected={checked}
+                  className={`rjsf-builder__msd-option${
+                    checked ? " rjsf-builder__msd-option--checked" : ""
+                  }`}
+                >
+                  <input
+                    id={optionId}
+                    type="checkbox"
+                    className="rjsf-builder__msd-checkbox"
+                    checked={checked}
+                    onChange={() => toggle(option.value)}
+                  />
+                  <span className="rjsf-builder__msd-option-label">
+                    {option.label}
+                  </span>
+                </label>
+              );
+            })
+          ) : (
+            <div className="rjsf-builder__msd-empty">No options</div>
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -15373,7 +15510,8 @@ export default function FormStudioBuilder(
                 systemDatagrid2Placeholder: SystemDatagrid2PlaceholderWidget,
                 scoreTotal: ScoreTotalWidget,
                 numberStepper: NumberStepperWidget,
-                numberScale: NumberScaleWidget
+                numberScale: NumberScaleWidget,
+                multiSelectDropdown: MultiSelectDropdownWidget
               }}
               fields={FORM_FIELDS}
               templates={FORM_TEMPLATES}
@@ -15545,7 +15683,8 @@ export default function FormStudioBuilder(
               systemDatagrid2Placeholder: SystemDatagrid2PlaceholderWidget,
                 scoreTotal: ScoreTotalWidget,
               numberStepper: NumberStepperWidget,
-              numberScale: NumberScaleWidget
+              numberScale: NumberScaleWidget,
+                multiSelectDropdown: MultiSelectDropdownWidget
             }}
             fields={FORM_FIELDS}
             templates={FORM_TEMPLATES}
@@ -16007,7 +16146,8 @@ export default function FormStudioBuilder(
                     systemDatagrid2Placeholder: SystemDatagrid2PlaceholderWidget,
                 scoreTotal: ScoreTotalWidget,
                     numberStepper: NumberStepperWidget,
-                    numberScale: NumberScaleWidget
+                    numberScale: NumberScaleWidget,
+                multiSelectDropdown: MultiSelectDropdownWidget
                   }}
                   fields={FORM_FIELDS}
                   templates={FORM_TEMPLATES}
