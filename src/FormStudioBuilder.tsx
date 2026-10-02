@@ -7,6 +7,7 @@ import {
   createElement,
   forwardRef,
   Fragment,
+  memo,
   ReactElement,
   type ReactNode,
   useCallback,
@@ -7173,7 +7174,7 @@ function SystemDatagrid2PlaceholderWidget(props: any): ReactElement {
       <div id={props?.id} className="rjsf-builder__system-template-placeholder">
         <div
           className="rjsf-builder__system-template-placeholder__widget"
-          dangerouslySetInnerHTML={{ __html: slotHtml }}
+          dangerouslySetInnerHTML={htmlProp(slotHtml)}
         />
       </div>
     );
@@ -7353,6 +7354,22 @@ function ScoreTotalWidget(props: any): ReactElement {
     </div>
   );
 }
+// React 19 compares dangerouslySetInnerHTML by object identity, so a fresh
+// { __html } literal re-writes innerHTML on every render (every keystroke for
+// the 42 headings in a CCA). Mendix's dialog watches its DOM and re-measures
+// the whole page on each such change. Same string -> same object.
+const innerHtmlPropCache = new Map<string, { __html: string }>();
+function htmlProp(html: string): { __html: string } {
+  let prop = innerHtmlPropCache.get(html);
+  if (!prop) {
+    if (innerHtmlPropCache.size > 2000) {
+      innerHtmlPropCache.clear();
+    }
+    prop = { __html: html };
+    innerHtmlPropCache.set(html, prop);
+  }
+  return prop;
+}
 function ContentBlockWidget(props: any): ReactElement {
   const options = (props?.options || {}) as {
     contentText?: unknown;
@@ -7426,7 +7443,7 @@ function ContentBlockWidget(props: any): ReactElement {
     <div
       id={props?.id}
       className={`rjsf-builder__content-block${styleClass}`}
-      dangerouslySetInnerHTML={{ __html: html }}
+      dangerouslySetInnerHTML={htmlProp(html)}
     />
   );
 }
@@ -10411,7 +10428,11 @@ const RichTemplateEditor = forwardRef<
     </div>
   );
 });
-function SnippetsLayer(props: SnippetsLayerProps): ReactElement | null {
+// Memoized: its props are stable while the user types, so it no longer
+// re-renders (and re-measures the focused field, forcing a full layout of the
+// form) on every keystroke. Field growth is tracked with a ResizeObserver.
+const SnippetsLayer = memo(SnippetsLayerImpl);
+function SnippetsLayerImpl(props: SnippetsLayerProps): ReactElement | null {
   const { snippets, containerRef, onManage } = props;
   const [field, setField] = useState<SnippetTargetField | null>(null);
   const [open, setOpen] = useState(false);
@@ -10543,7 +10564,12 @@ function SnippetsLayer(props: SnippetsLayerProps): ReactElement | null {
     });
     window.addEventListener("scroll", reposition, true);
     window.addEventListener("resize", reposition);
+    // The button sits under the field; follow it when it grows or shrinks.
+    const sizeObserver =
+      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(reposition);
+    sizeObserver?.observe(field);
     return () => {
+      sizeObserver?.disconnect();
       observer.disconnect();
       window.removeEventListener("scroll", reposition, true);
       window.removeEventListener("resize", reposition);
@@ -11026,15 +11052,34 @@ function FsPageRail({ instanceId }: { instanceId: string }): ReactElement | null
       fsRailBus.releaseHost(instanceId);
     };
   }, [instanceId]);
+  // A clicked row keeps the highlight until the user moves on (wheel, touch,
+  // keyboard or a click elsewhere), not for a fixed time: a section near the
+  // end of the document can't scroll to the top, so the observers would
+  // otherwise hand the highlight to a neighbour once a timer ran out.
   useEffect(() => {
     if (!clicked) {
       return;
     }
-    const timer = window.setTimeout(
-      () => setClicked(null),
-      Math.max(0, clicked.until - Date.now())
-    );
-    return () => window.clearTimeout(timer);
+    const release = (): void => setClicked(null);
+    const events = ["wheel", "touchstart", "keydown", "pointerdown"];
+    // Let the click that set this (and its smooth scroll) finish first.
+    const arm = window.setTimeout(() => {
+      events.forEach((name) =>
+        window.addEventListener(name, release, { capture: true, passive: true })
+      );
+    }, 300);
+    const timer = Number.isFinite(clicked.until)
+      ? window.setTimeout(release, Math.max(0, clicked.until - Date.now()))
+      : undefined;
+    return () => {
+      window.clearTimeout(arm);
+      if (timer !== undefined) {
+        window.clearTimeout(timer);
+      }
+      events.forEach((name) =>
+        window.removeEventListener(name, release, { capture: true })
+      );
+    };
   }, [clicked]);
   useEffect(() => {
     if (!isHost) {
@@ -11087,7 +11132,7 @@ function FsPageRail({ instanceId }: { instanceId: string }): ReactElement | null
   }
   const jumpEntry = entries.find((entry) => entry.hasMissingRequired);
   const activateSection = (entry: FsRailEntry): void => {
-    setClicked({ section: entry.id, group: "", until: Date.now() + 1500 });
+    setClicked({ section: entry.id, group: "", until: Number.POSITIVE_INFINITY });
     entry.scrollToSelf();
   };
   return createPortal(
@@ -11165,7 +11210,7 @@ function FsPageRail({ instanceId }: { instanceId: string }): ReactElement | null
                             setClicked({
                               section: entry.id,
                               group: group.key,
-                              until: Date.now() + 1200
+                              until: Number.POSITIVE_INFINITY
                             });
                             entry.scrollToGroup(group.key);
                           }}
@@ -11237,12 +11282,45 @@ export default function FormStudioBuilder(
   // While a rail click's smooth scroll is in flight, observer callbacks fire
   // for every intermediate section; ignore them so the clicked row holds.
   const suppressActiveUntilRef = useRef<number>(0);
+  // Updates that arrive during the hold are kept, not dropped: the observer
+  // only fires on visibility changes, so if the scroll settles inside the
+  // hold, the last report is the only one that says where the user landed.
+  const pendingActiveKeyRef = useRef<string | null>(null);
+  const pendingActiveTimerRef = useRef<number | null>(null);
   const handleActiveSectionChange = useCallback((sectionKey: string) => {
-    if (Date.now() < suppressActiveUntilRef.current) {
+    const waitMs = suppressActiveUntilRef.current - Date.now();
+    if (waitMs > 0) {
+      pendingActiveKeyRef.current = sectionKey || "";
+      if (pendingActiveTimerRef.current === null) {
+        const flush = (): void => {
+          const remaining = suppressActiveUntilRef.current - Date.now();
+          if (remaining > 0) {
+            // another rail click extended the hold
+            pendingActiveTimerRef.current = window.setTimeout(flush, remaining + 20);
+            return;
+          }
+          pendingActiveTimerRef.current = null;
+          const key = pendingActiveKeyRef.current;
+          pendingActiveKeyRef.current = null;
+          if (key !== null) {
+            setActiveViewerSectionKey(key || null);
+          }
+        };
+        pendingActiveTimerRef.current = window.setTimeout(flush, waitMs + 20);
+      }
       return;
     }
+    pendingActiveKeyRef.current = null;
     setActiveViewerSectionKey(sectionKey || null);
   }, []);
+  useEffect(
+    () => () => {
+      if (pendingActiveTimerRef.current !== null) {
+        window.clearTimeout(pendingActiveTimerRef.current);
+      }
+    },
+    []
+  );
   const [rightPanelCollapsed, setRightPanelCollapsed] =
     useState<boolean>(false);
   // Responsive builder: the widget's own width drives layout adaptations
@@ -15349,7 +15427,7 @@ export default function FormStudioBuilder(
           {hasMeaningfulHtml(documentPreviewBodyHtml) ? (
             <div
               className="rjsf-builder__document-preview-body"
-              dangerouslySetInnerHTML={{ __html: documentPreviewBodyHtml }}
+              dangerouslySetInnerHTML={htmlProp(documentPreviewBodyHtml)}
             />
           ) : (
             <div className="rjsf-builder__document-preview-empty">
@@ -15502,12 +15580,12 @@ export default function FormStudioBuilder(
                 systemSectionHtmlBySlot,
                 contentBlockTokens: contentBlockTokenValues,
                 selectedPreviewKey: undefined,
-                previewScrollToSectionKey: showViewerComponentsPanel
+                // Scroll requests also come from the page rail (rail bus), which
+                // runs with the widget's own section panel hidden.
+                previewScrollToSectionKey: isViewer
                   ? previewScrollToSectionKey
                   : undefined,
-                previewScrollRequest: showViewerComponentsPanel
-                  ? previewScrollRequest
-                  : 0,
+                previewScrollRequest: isViewer ? previewScrollRequest : 0,
                 sectionStatsByKey,
                 wizard: wizardContext,
                 activeSectionKey: activeViewerSectionKey || undefined,
