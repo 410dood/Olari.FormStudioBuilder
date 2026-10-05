@@ -4899,3 +4899,110 @@ details.rjsf-builder__group[open] .rjsf-builder__group-chev { transform: rotate(
   max-width: none;
   margin: 0;
 }
+
+/* v0.8.1: field overrides of the form's answer placement, in every layout. */
+.fsdoc--above .fsdoc-row.fsdoc-row--beside,
+.fsdoc--inline .fsdoc-row.fsdoc-row--beside {
+  display: grid;
+  grid-template-columns: var(--fsdoc-label-col) minmax(0, 1fr);
+  column-gap: 14px;
+  margin: 0;
+  padding: var(--fsdoc-gap) 0;
+  border-bottom: 1px solid var(--fsdoc-rule);
+  break-inside: avoid;
+}
+
+.fsdoc--above .fsdoc-row--beside .fsdoc-label {
+  display: inline;
+}
+
+.fsdoc--inline .fsdoc-row--beside .fsdoc-colon {
+  display: none;
+}
+
+.fsdoc--inline .fsdoc-row--under .fsdoc-label {
+  display: block;
+}
+
+/* Designer only: "not printed, because ..." notes in the Document preview
+   and the per-field example. Never in Preview mode or the PDF. */
+.fsdoc p.fsdoc-note {
+  margin: 2px 0;
+  padding: 2px 8px;
+  border-left: 2px dashed #c4cad4;
+  color: #8a93a3;
+  font-size: 0.85em;
+  font-style: italic;
+}
+
+/* Designer: field differs from the form's document settings. */
+.rjsf-builder__print-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.rjsf-builder__override-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #fff4e5;
+  color: #9a5b00;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.rjsf-builder__override-badge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #e08a00;
+}
+
+/* v0.8.1: form-entry control fixes. The older checkbox label rules target
+   ".field .checkbox > label", a class rjsf never renders, so Atlas won. */
+.rjsf-builder .form-group.rjsf-field-boolean:not(.rjsf-builder__field--opt-modern) > .checkbox > label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 0;
+  margin: 0;
+}
+
+/* Modern (segmented) radios: equal boxes, centred text, hidden input out of
+   the flow (Atlas forces position: relative on radios). */
+.rjsf-builder .form-group.rjsf-builder__field--opt-modern .field-radio-group > .radio {
+  padding-top: 0;
+  min-height: 0;
+}
+
+.rjsf-builder .form-group.rjsf-builder__field--opt-modern .field-radio-group > .radio > label {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 16px;
+}
+
+.rjsf-builder .form-group.rjsf-builder__field--opt-modern .field-radio-group input[type="radio"] {
+  position: absolute !important;
+}
+
+/* Data grid with no rows: an empty-state box instead of nothing. */
+.rjsf-builder__array-list:empty {
+  display: block;
+  padding: 14px;
+  border: 1px dashed var(--rb-border);
+  border-radius: 8px;
+  text-align: center;
+  color: var(--rb-muted);
+  font-size: 12px;
+}
+
+.rjsf-builder__array-list:empty::before {
+  content: "No rows yet";
+}

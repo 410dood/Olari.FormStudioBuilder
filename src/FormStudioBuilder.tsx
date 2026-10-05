@@ -296,10 +296,16 @@ interface FormComponent {
   /** Extra space above this item in the document output ("a little" /
    *  "more"). On a Spacer block it is the size of the space itself. */
   outputSpaceBefore?: OutputSpace;
-  /** "under": the answer prints on its own line under the question. Ignored
-   *  for a matrix (it already prints a title and one row per line) and for
-   *  fields with their own wording. undefined = follow the document style. */
-  outputPlacement?: "under";
+  /** Field override of the form's answer placement: "under" prints the answer
+   *  on its own line under the question, "beside" next to it. Ignored for a
+   *  matrix (it already prints a title and one row per line) and for fields
+   *  with their own wording. undefined = same as the form. */
+  outputPlacement?: "under" | "beside";
+  /** Field override of the form's "Unanswered questions". "hide" is also
+   *  written as hideOutputIfEmpty: true so v0.8.0 prints it the same way.
+   *  undefined = same as the form (or "hide" when only the old
+   *  hideOutputIfEmpty flag is stored). */
+  outputUnanswered?: "dash" | "hide";
   /** Date fields: what the field captures. undefined = date only;
    *  "time" / "datetime" absorb the former standalone field types. */
   dateCapture?: "time" | "datetime";
@@ -2590,6 +2596,16 @@ function asHtmlSnippet(value: string): string {
 // preview and the PDF lay the same markup out as a label column, a stacked
 // label, or the classic inline line, at three spacing densities.
 const OUTPUT_DASH = "—";
+// One set of words for the form setting and the field override.
+const OUTPUT_LAYOUT_LABELS: Record<OutputLayout, string> = {
+  beside: "Beside the question",
+  above: "Under the question",
+  inline: "One line (classic)"
+};
+const OUTPUT_UNANSWERED_LABELS: Record<"dash" | "hide", string> = {
+  dash: "Show a dash",
+  hide: "Leave out"
+};
 // The PDF header/footer templates only feed buildPrintDocumentHtml, whose
 // output (resolvedPdfHtmlAttr) no page wires; the real PDF page gets its
 // header and footer from the Mendix page. The designer controls are hidden;
@@ -2598,7 +2614,8 @@ const SHOW_PDF_HEADER_FOOTER_CONTROLS: boolean = false;
 const OUTPUT_BLOCK_TAG_PATTERN =
   /<\/?(p|div|h[1-6]|ul|ol|li|table|thead|tbody|tr|td|th|section|article|header|footer|figure|blockquote|pre|hr|dl|dt|dd|img|svg|canvas)\b/i;
 interface OutputItem {
-  kind: "content" | "heading" | "group" | "space";
+  /** "note": designer-only "not printed, because ..." line. */
+  kind: "content" | "heading" | "group" | "space" | "note";
   html: string;
   /** Headings only: 1 = Heading, 2 = Subheading, and so on. */
   level?: number;
@@ -2608,6 +2625,74 @@ function resolveOutputSpace(value: unknown): OutputSpace | undefined {
   return normalized === "small" || normalized === "large"
     ? normalized
     : undefined;
+}
+/** Types whose answer prints as a plain "question, answer" row, so the answer
+ *  placement override means something. A matrix prints its own rows; a
+ *  signature or data grid prints an image or table. */
+function supportsOutputPlacement(component: FormComponent): boolean {
+  return ![
+    "matrix",
+    "datagrid",
+    "systemDatagrid2",
+    "signature",
+    "contentBlock"
+  ].includes(component.type);
+}
+/** The field's own "Unanswered questions" override, if any. The old
+ *  hideOutputIfEmpty flag reads as "Leave out". */
+function fieldOutputUnansweredOverride(
+  component: FormComponent
+): "dash" | "hide" | undefined {
+  return (
+    component.outputUnanswered ||
+    (component.hideOutputIfEmpty ? "hide" : undefined)
+  );
+}
+/** True when the field differs from the form's document settings (own
+ *  wording does not count). Drives the badge and "Reset to form settings". */
+function hasFormSettingOverrides(component: FormComponent): boolean {
+  return Boolean(
+    (component.outputPlacement && supportsOutputPlacement(component)) ||
+      fieldOutputUnansweredOverride(component)
+  );
+}
+/** One definition of "unanswered" for the form setting and the field
+ *  override: the answer prints nothing. An unticked checkbox prints "No", so
+ *  it counts as answered. Content blocks, data grids and matrices use their
+ *  own content check. */
+function isOutputAnswerEmpty(
+  component: FormComponent,
+  data: JsonObject,
+  tokenValues: Record<string, string>
+): boolean {
+  if (
+    component.type === "contentBlock" ||
+    component.type === "datagrid" ||
+    component.type === "matrix"
+  ) {
+    return !hasOutputValue(component, data);
+  }
+  const valueToken =
+    component.type === "total" ? `${component.key}_display` : component.key;
+  return !clean(resolveTokenValue(valueToken, tokenValues));
+}
+function plainTextFromHtml(html: string): string {
+  return clean(
+    html
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;|&#160;/g, " ")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&amp;/g, "&")
+      .replace(/\s+/g, " ")
+  );
+}
+function outputNoteHtml(subject: string, reason: string): string {
+  return `<p class="fsdoc-note">${escapeHtml(
+    subject
+  )}: not printed, ${escapeHtml(reason)}</p>`;
 }
 function outputGapHtml(size: OutputSpace): string {
   return `<div class="fsdoc-gap fsdoc-gap--${size}" aria-hidden="true"></div>`;
@@ -2623,15 +2708,26 @@ function outputValueHtml(
 function renderOutputRow(
   labelHtml: string,
   valueHtml: string,
-  options: { stacked?: boolean } = {}
+  options: { stacked?: boolean; placement?: "under" | "beside" } = {}
 ): string {
   const plainLength = valueHtml.replace(/<[^>]+>/g, "").length;
   const long =
-    options.stacked || plainLength > 140 || /<br\s*\/?>/i.test(valueHtml);
+    options.stacked ||
+    options.placement === "under" ||
+    plainLength > 140 ||
+    /<br\s*\/?>/i.test(valueHtml);
+  // Placement override classes, so the override also works in layouts whose
+  // default is the other placement (and in "One line (classic)").
+  const placementClass =
+    options.placement === "under"
+      ? " fsdoc-row--under"
+      : options.placement === "beside" && !long
+      ? " fsdoc-row--beside"
+      : "";
   const value = valueHtml
     ? `<span class="fsdoc-value">${valueHtml}</span>`
     : `<span class="fsdoc-value fsdoc-empty">${OUTPUT_DASH}</span>`;
-  return `<p class="fsdoc-row${long ? " fsdoc-row--long" : ""}${
+  return `<p class="fsdoc-row${long ? " fsdoc-row--long" : ""}${placementClass}${
     valueHtml ? "" : " fsdoc-row--empty"
   }"><strong class="fsdoc-label">${labelHtml}<span class="fsdoc-colon">:</span></strong> ${value}</p>`;
 }
@@ -2757,7 +2853,8 @@ function renderStructuredFieldOutput(
     return "";
   }
   return renderOutputRow(labelHtml, valueHtml, {
-    stacked: simple?.stacked || component.outputPlacement === "under"
+    stacked: simple?.stacked,
+    placement: simple ? undefined : component.outputPlacement
   });
 }
 /** Drops headings that ended up with nothing under them. Group titles are
@@ -2768,7 +2865,9 @@ function renderStructuredFieldOutput(
  *  it; a dropped one does not. */
 function pruneEmptyOutputHeadings(
   items: OutputItem[],
-  pruneAuthoredHeadings: boolean
+  pruneAuthoredHeadings: boolean,
+  /** Designer only: put a note where a heading was dropped. */
+  withNotes = false
 ): OutputItem[] {
   const kept: OutputItem[] = [];
   const LEVELS = 8;
@@ -2790,6 +2889,16 @@ function pruneEmptyOutputHeadings(
         (item.kind === "heading" && !pruneAuthoredHeadings);
       if (keep) {
         kept.push(item);
+      } else if (withNotes) {
+        kept.push({
+          kind: "note",
+          html: outputNoteHtml(
+            `${item.kind === "group" ? "Group title" : "Heading"} "${plainTextFromHtml(
+              item.html
+            )}"`,
+            "nothing under it is printed"
+          )
+        });
       }
       for (let other = 0; other < LEVELS; other += 1) {
         if (other >= level) {
@@ -2810,7 +2919,10 @@ function resolveDocumentOutputHtml(
   contextTokens: Record<string, string>,
   systemSectionHtmlBySlot: Record<string, string> = {},
   /** Render only this component (the designer's "Prints as" example). */
-  onlyComponentId?: string
+  onlyComponentId?: string,
+  /** Designer only: where an item is left out, print a muted note saying
+   *  why. Off for Preview mode, the PDF and every saved output. */
+  withNotes = false
 ): string {
   const sectionSwitchableByKey = buildSectionSwitchableMap(definition);
   const sectionVisibilityByKey = applySectionVisibilityLegacyFallback(
@@ -2824,29 +2936,63 @@ function resolveDocumentOutputHtml(
   const outputStyle = normalizeBuilderOptions(definition.builderOptions);
   const content = (html: string): OutputItem | null =>
     clean(html) ? { kind: "content", html } : null;
+  const notedSections = new Set<string>();
   const renderComponent = (component: FormComponent): OutputItem | null => {
+      const subject =
+        clean(component.label) ||
+        clean(component.contentText).slice(0, 60) ||
+        component.key;
+      const drop = (reason: string): OutputItem | null =>
+        withNotes
+          ? { kind: "note", html: outputNoteHtml(subject, reason) }
+          : null;
       const isSpacer =
         component.type === "contentBlock" && component.blockStyle === "spacer";
       const perAnswerTemplate = getPerAnswerOutputTemplate(component, data);
+      const sectionKey = resolveComponentSectionKey(component);
+      const sectionIsSwitchable = Boolean(sectionSwitchableByKey[sectionKey]);
+      const sectionIsVisible =
+        !sectionIsSwitchable || sectionVisibilityByKey[sectionKey] !== false;
       if (perAnswerTemplate != null && !clean(perAnswerTemplate)) {
-        return null;
+        return sectionIsVisible
+          ? drop(
+              `the answer "${clean(
+                stringifyTokenValue(data[component.key])
+              )}" is set to Omit`
+            )
+          : null;
       }
       const template =
         perAnswerTemplate != null
           ? perAnswerTemplate
           : getEffectiveDocumentOutputTemplate(component);
       if (!template && component.type !== "systemDatagrid2" && !isSpacer) {
-        return null;
+        // Dividers and empty text blocks never print; only a field whose
+        // wording was emptied gets a note.
+        return component.type === "contentBlock" || !sectionIsVisible
+          ? null
+          : drop("its wording is empty");
       }
-      const sectionKey = resolveComponentSectionKey(component);
-      const sectionIsSwitchable = Boolean(sectionSwitchableByKey[sectionKey]);
-      const sectionIsVisible =
-        !sectionIsSwitchable || sectionVisibilityByKey[sectionKey] !== false;
       if (!sectionIsVisible) {
-        return null;
+        // One note per switched-off section, not one per item.
+        if (notedSections.has(sectionKey)) {
+          return null;
+        }
+        notedSections.add(sectionKey);
+        return withNotes
+          ? {
+              kind: "note",
+              html: outputNoteHtml(
+                `Section "${
+                  normalizeSectionName(component.section) || sectionKey
+                }"`,
+                "it is switched off"
+              )
+            }
+          : null;
       }
       if (!isComponentVisibleForSummary(component, data, componentsByKey)) {
-        return null;
+        return isSpacer ? null : drop("hidden by a visibility rule");
       }
       if (isSpacer) {
         // A Spacer block prints as vertical space (it used to print nothing).
@@ -2855,8 +3001,13 @@ function resolveDocumentOutputHtml(
           html: outputGapHtml(component.outputSpaceBefore || "small")
         };
       }
-      if (component.hideOutputIfEmpty && !hasOutputValue(component, data)) {
-        return null;
+      // The field's own "Unanswered questions" choice wins over the form's.
+      const unansweredOverride = fieldOutputUnansweredOverride(component);
+      if (
+        unansweredOverride === "hide" &&
+        isOutputAnswerEmpty(component, data, tokenValues)
+      ) {
+        return drop("unanswered (field setting)");
       }
       // Question/answer fields: the default output, or an authored template
       // that is still only "label, then the answer".
@@ -2874,8 +3025,15 @@ function resolveDocumentOutputHtml(
             component,
             simple,
             tokenValues,
-            outputStyle.outputUnanswered
+            unansweredOverride || outputStyle.outputUnanswered
           );
+          if (structured === "") {
+            return drop(
+              unansweredOverride
+                ? "unanswered (field setting)"
+                : "unanswered (form setting)"
+            );
+          }
           if (structured != null) {
             return content(structured);
           }
@@ -2888,7 +3046,7 @@ function resolveDocumentOutputHtml(
           extractTemplateTokens(template).includes(component.key) &&
           !clean(resolveTokenValue(component.key, tokenValues))
         ) {
-          return null;
+          return drop("the sentence needs an answer");
         }
       }
       if (
@@ -2899,7 +3057,7 @@ function resolveDocumentOutputHtml(
         component.type !== "datagrid" &&
         isNarrativeWithAllValueTokensEmpty(template, tokenValues)
       ) {
-        return null;
+        return drop("the sentence needs an answer");
       }
       if (component.type === "systemDatagrid2") {
         const slotKey = clean(component.systemTemplateSlotProperty);
@@ -3010,7 +3168,11 @@ function resolveDocumentOutputHtml(
         });
       }
     }
-    if (component.outputSpaceBefore && item.kind !== "space") {
+    if (
+      component.outputSpaceBefore &&
+      item.kind !== "space" &&
+      item.kind !== "note"
+    ) {
       items.push({
         kind: "space",
         html: outputGapHtml(component.outputSpaceBefore)
@@ -3020,7 +3182,8 @@ function resolveDocumentOutputHtml(
   });
   const printed = pruneEmptyOutputHeadings(
     items,
-    outputStyle.outputUnanswered === "hide"
+    outputStyle.outputUnanswered === "hide",
+    withNotes
   );
   if (!printed.some((item) => item.kind !== "space")) {
     return "";
@@ -3341,6 +3504,10 @@ function buildPrintDocumentHtml(
   contextTokens: Record<string, string>,
   systemSectionHtmlBySlot: Record<string, string>
 ): string {
+  // Build counter for tests: shows whether this (normally skipped) renderer
+  // still runs on a page.
+  const counterHost = window as unknown as { __fsbPrintHtmlBuilds?: number };
+  counterHost.__fsbPrintHtmlBuilds = (counterHost.__fsbPrintHtmlBuilds || 0) + 1;
   const sectionSwitchableByKey = buildSectionSwitchableMap(definition);
   const sectionVisibilityByKey = applySectionVisibilityLegacyFallback(
     parseSectionVisibilityMap(data[SECTION_VISIBILITY_DATA_KEY]),
@@ -3754,7 +3921,10 @@ function buildResolvedOutputArtifacts(
   definition: FormDefinition,
   data: JsonObject,
   contextTokens: Record<string, string>,
-  systemSectionHtmlBySlot: Record<string, string>
+  systemSectionHtmlBySlot: Record<string, string>,
+  /** Build the print-layout HTML too. Only when resolvedPdfHtmlAttr is wired;
+   *  no page in the app wires it today, so this is normally skipped. */
+  includePrintHtml: boolean
 ): { bodyHtml: string; pdfHtml: string } {
   return {
     bodyHtml: resolveDocumentOutputHtml(
@@ -3763,12 +3933,14 @@ function buildResolvedOutputArtifacts(
       contextTokens,
       systemSectionHtmlBySlot
     ),
-    pdfHtml: buildPrintDocumentHtml(
-      definition,
-      data,
-      contextTokens,
-      systemSectionHtmlBySlot
-    )
+    pdfHtml: includePrintHtml
+      ? buildPrintDocumentHtml(
+          definition,
+          data,
+          contextTokens,
+          systemSectionHtmlBySlot
+        )
+      : ""
   };
 }
 function normalizeFieldType(value: unknown): FieldType {
@@ -5862,10 +6034,18 @@ function normalizeComponent(item: any, index: number): FormComponent {
     textFormat,
     blockStyle,
     outputSpaceBefore: resolveOutputSpace(item?.outputSpaceBefore),
-    outputPlacement:
-      clean(item?.outputPlacement).toLowerCase() === "under"
-        ? "under"
-        : undefined,
+    outputPlacement: (() => {
+      const placement = clean(item?.outputPlacement).toLowerCase();
+      return placement === "under" || placement === "beside"
+        ? (placement as "under" | "beside")
+        : undefined;
+    })(),
+    outputUnanswered: (() => {
+      const unanswered = clean(item?.outputUnanswered).toLowerCase();
+      return unanswered === "dash" || unanswered === "hide"
+        ? (unanswered as "dash" | "hide")
+        : undefined;
+    })(),
     sectionSwitchEnabled: toBoolean(
       item?.sectionSwitchEnabled ??
         item?.allowSectionToggle ??
@@ -8702,7 +8882,9 @@ function ArrayFieldTemplate(props: any): ReactElement {
           </div>
         )
       ) : null}{" "}
-      {isTableDisplay && (items?.length || 0) > 0 ? (
+      {/* Headers show even with no rows, so an empty grid still reads as a
+          table (with the "No rows yet" box under them). */}
+      {isTableDisplay ? (
         <div className="rjsf-builder__array-table-head">
           {" "}
           <div className="row rjsf-builder__datagrid-row rjsf-builder__array-table-head-row">
@@ -12423,13 +12605,16 @@ export default function FormStudioBuilder(
           nextDefinition,
           sanitizedData,
           tokenContext,
-          systemSectionHtmlBySlot
+          systemSectionHtmlBySlot,
+          Boolean(source?.resolvedPdfHtmlAttr)
         );
         writeAttribute(
           source?.resolvedOutputHtmlAttr,
           outputArtifacts.bodyHtml
         );
-        writeAttribute(source?.resolvedPdfHtmlAttr, outputArtifacts.pdfHtml);
+        if (source?.resolvedPdfHtmlAttr) {
+          writeAttribute(source.resolvedPdfHtmlAttr, outputArtifacts.pdfHtml);
+        }
       }
       const nextDataJson = JSON.stringify(
         assertAnswersShape(sanitizedData),
@@ -12933,7 +13118,8 @@ export default function FormStudioBuilder(
         exampleData,
         tokenContext,
         systemSectionHtmlBySlot,
-        selectedComponent.id
+        selectedComponent.id,
+        true
       ),
       usesSample: sample !== undefined
     };
@@ -12945,32 +13131,52 @@ export default function FormStudioBuilder(
     tokenContext,
     systemSectionHtmlBySlot
   ]);
-  const selectedComponentOutputMode: "standard" | "under" | "custom" = (() => {
-    if (!selectedComponent) {
-      return "standard";
-    }
+  // An imported template that is only "{key_label}:" then the answer on the
+  // next line still reads as Standard with the answer under the question.
+  const selectedComponentStackedTemplate = (() => {
     if (
-      selectedComponent.type === "contentBlock" ||
-      selectedComponent.type === "datagrid"
+      !selectedComponent ||
+      !hasExplicitDocumentOutputTemplate(selectedComponent)
     ) {
-      return "custom";
-    }
-    // "Answer under the question" has no meaning for a matrix.
-    const placedUnder =
-      selectedComponent.outputPlacement === "under" &&
-      selectedComponent.type !== "matrix";
-    if (!hasExplicitDocumentOutputTemplate(selectedComponent)) {
-      return placedUnder ? "under" : "standard";
+      return null;
     }
     const simple = parseSimpleLabelValueTemplate(
       str(selectedComponent.documentOutputTemplate),
       selectedComponent.key
     );
-    if (simple && simple.labelTemplate === `{${selectedComponent.key}_label}`) {
-      return simple.stacked || placedUnder ? "under" : "standard";
-    }
-    return "custom";
+    return simple && simple.labelTemplate === `{${selectedComponent.key}_label}`
+      ? simple
+      : null;
   })();
+  const selectedComponentOutputMode: "standard" | "custom" = (() => {
+    if (!selectedComponent) {
+      return "standard";
+    }
+    if (
+      selectedComponent.type === "contentBlock" ||
+      selectedComponent.type === "datagrid" ||
+      Object.keys(selectedComponent.optionOutputTexts || {}).length
+    ) {
+      return "custom";
+    }
+    if (!hasExplicitDocumentOutputTemplate(selectedComponent)) {
+      return "standard";
+    }
+    return selectedComponentStackedTemplate ? "standard" : "custom";
+  })();
+  const selectedComponentPlacementOverride:
+    | "under"
+    | "beside"
+    | undefined = selectedComponent
+    ? selectedComponent.outputPlacement ||
+      (selectedComponentStackedTemplate?.stacked ? "under" : undefined)
+    : undefined;
+  const selectedComponentDiffersFromForm = Boolean(
+    selectedComponent &&
+      (hasFormSettingOverrides(selectedComponent) ||
+        (selectedComponentStackedTemplate?.stacked &&
+          supportsOutputPlacement(selectedComponent)))
+  );
   // "My own wording" stays open for the field it was opened on, even while the
   // text is still a plain "label: answer".
   const [customWordingOpenId, setCustomWordingOpenId] = useState<string | null>(
@@ -12987,19 +13193,30 @@ export default function FormStudioBuilder(
     props.viewMode === "viewer"
       ? resolveBooleanSetting(props.showDocumentPreview, false)
       : builderTab === "documentOutput";
-  const shownOutputArtifacts = useMemo(
+  // The designer's Document preview also says where and why an item is left
+  // out; the viewer's preview is the real output.
+  const outputNotesShown = props.viewMode !== "viewer";
+  const documentPreviewBodyHtml = useMemo(
     () =>
       outputHtmlShown
-        ? buildResolvedOutputArtifacts(
+        ? resolveDocumentOutputHtml(
             definition,
             formData,
             tokenContext,
-            systemSectionHtmlBySlot
+            systemSectionHtmlBySlot,
+            undefined,
+            outputNotesShown
           )
-        : null,
-    [outputHtmlShown, definition, formData, tokenContext, systemSectionHtmlBySlot]
+        : "",
+    [
+      outputHtmlShown,
+      outputNotesShown,
+      definition,
+      formData,
+      tokenContext,
+      systemSectionHtmlBySlot
+    ]
   );
-  const documentPreviewBodyHtml = shownOutputArtifacts?.bodyHtml || "";
   const outputStyleOptions = normalizeBuilderOptions(definition.builderOptions);
   const documentOutputWorkspace = (
     <div className="rjsf-builder__document-output-layout">
@@ -13015,13 +13232,11 @@ export default function FormStudioBuilder(
           {(
             [
               {
-                title: "Layout",
+                title: "Answer placement",
                 value: outputStyleOptions.outputLayout,
-                choices: [
-                  ["beside", "Answer beside the question"],
-                  ["above", "Answer under the question"],
-                  ["inline", "One line (classic)"]
-                ],
+                choices: (["beside", "above", "inline"] as OutputLayout[]).map(
+                  (layout) => [layout, OUTPUT_LAYOUT_LABELS[layout]]
+                ),
                 apply: (next: string) =>
                   updateBuilderOptions((options) => ({
                     ...options,
@@ -13045,10 +13260,10 @@ export default function FormStudioBuilder(
               {
                 title: "Unanswered questions",
                 value: outputStyleOptions.outputUnanswered,
-                choices: [
-                  ["dash", "Show a dash"],
-                  ["hide", "Leave out"]
-                ],
+                choices: (["dash", "hide"] as const).map((choice) => [
+                  choice,
+                  OUTPUT_UNANSWERED_LABELS[choice]
+                ]),
                 apply: (next: string) =>
                   updateBuilderOptions((options) => ({
                     ...options,
@@ -17155,7 +17370,7 @@ export default function FormStudioBuilder(
                                     }))
                                   }
                                 />{" "}
-                                <span>Hide label</span>{" "}
+                                <span>Hide label (form and document)</span>{" "}
                               </label>{" "}
                               <label className="rjsf-builder__field rjsf-builder__label-display-position">
                                 {" "}
@@ -18738,8 +18953,47 @@ export default function FormStudioBuilder(
                       ) : (
                         <div className="rjsf-builder__block">
                           {" "}
-                          <div className="rjsf-builder__subtitle">
+                          <div className="rjsf-builder__subtitle rjsf-builder__print-title">
                             How this prints
+                            {selectedComponentDiffersFromForm ? (
+                              <Fragment>
+                                <span
+                                  className="rjsf-builder__override-badge"
+                                  title="This field overrides the form's document settings"
+                                >
+                                  Differs from form
+                                </span>
+                                <button
+                                  type="button"
+                                  className="rjsf-builder__button rjsf-builder__button--small"
+                                  onClick={() =>
+                                    updateDefinition((current) => ({
+                                      ...current,
+                                      components: current.components.map(
+                                        (component) =>
+                                          component.id === selectedComponent.id
+                                            ? {
+                                                ...component,
+                                                outputPlacement: undefined,
+                                                outputUnanswered: undefined,
+                                                hideOutputIfEmpty: false,
+                                                // An imported "answer on the
+                                                // next line" template is a
+                                                // placement, not wording.
+                                                documentOutputTemplate:
+                                                  selectedComponentStackedTemplate
+                                                    ? undefined
+                                                    : component.documentOutputTemplate
+                                              }
+                                            : component
+                                      )
+                                    }))
+                                  }
+                                >
+                                  Reset to form settings
+                                </button>
+                              </Fragment>
+                            ) : null}
                           </div>
                           {selectedComponent.type !== "contentBlock" &&
                           selectedComponent.type !== "datagrid" ? (
@@ -18750,17 +19004,10 @@ export default function FormStudioBuilder(
                             >
                               {(
                                 [
-                                  ["standard", "Question and answer"],
-                                  ["under", "Answer under the question"],
+                                  ["standard", "Standard"],
                                   ["custom", "My own wording"]
-                                ] as Array<["standard" | "under" | "custom", string]>
-                              )
-                                .filter(
-                                  ([mode]) =>
-                                    mode !== "under" ||
-                                    selectedComponent.type !== "matrix"
-                                )
-                                .map(([mode, label]) => {
+                                ] as Array<["standard" | "custom", string]>
+                              ).map(([mode, label]) => {
                                 const activeMode = showCustomWording
                                   ? "custom"
                                   : selectedComponentOutputMode;
@@ -18778,30 +19025,28 @@ export default function FormStudioBuilder(
                                           ? selectedComponent.id
                                           : null
                                       );
-                                      if (mode === "custom") {
-                                        return;
-                                      }
-                                      // A field property, not a template: a
-                                      // total keeps its score text and the
-                                      // label still follows the field.
-                                      const nextPlacement =
-                                        mode === "under"
-                                          ? ("under" as const)
-                                          : undefined;
+                                      // Own wording: the placement override
+                                      // no longer applies, so clear it.
+                                      // Standard: the field's own words
+                                      // (template and per-answer texts) go.
                                       updateDefinition((current) => ({
                                         ...current,
                                         components: current.components.map(
                                           (component) =>
-                                            component.id ===
+                                            component.id !==
                                             selectedComponent.id
+                                              ? component
+                                              : mode === "custom"
                                               ? {
+                                                  ...component,
+                                                  outputPlacement: undefined
+                                                }
+                                              : {
                                                   ...component,
                                                   documentOutputTemplate:
                                                     undefined,
-                                                  outputPlacement:
-                                                    nextPlacement
+                                                  optionOutputTexts: undefined
                                                 }
-                                              : component
                                         )
                                       }));
                                     }}
@@ -18811,6 +19056,106 @@ export default function FormStudioBuilder(
                                 );
                               })}
                             </div>
+                          ) : null}
+                          {!showCustomWording &&
+                          supportsOutputPlacement(selectedComponent) ? (
+                            <label className="rjsf-builder__field">
+                              <span>Answer placement</span>
+                              <select
+                                className="rjsf-builder__select"
+                                aria-label="Answer placement"
+                                value={selectedComponentPlacementOverride || ""}
+                                onChange={(event) => {
+                                  const raw = event.target.value;
+                                  const nextPlacement =
+                                    raw === "under" || raw === "beside"
+                                      ? (raw as "under" | "beside")
+                                      : undefined;
+                                  updateDefinition((current) => ({
+                                    ...current,
+                                    components: current.components.map(
+                                      (component) =>
+                                        component.id === selectedComponent.id
+                                          ? {
+                                              ...component,
+                                              outputPlacement: nextPlacement,
+                                              documentOutputTemplate:
+                                                selectedComponentStackedTemplate
+                                                  ? undefined
+                                                  : component.documentOutputTemplate
+                                            }
+                                          : component
+                                    )
+                                  }));
+                                }}
+                              >
+                                <option value="">
+                                  {`Same as form (${
+                                    OUTPUT_LAYOUT_LABELS[
+                                      outputStyleOptions.outputLayout
+                                    ]
+                                  })`}
+                                </option>
+                                <option value="beside">
+                                  {OUTPUT_LAYOUT_LABELS.beside}
+                                </option>
+                                <option value="under">
+                                  {OUTPUT_LAYOUT_LABELS.above}
+                                </option>
+                              </select>
+                            </label>
+                          ) : null}
+                          {selectedComponent.type !== "contentBlock" ||
+                          fieldOutputUnansweredOverride(selectedComponent) ? (
+                            <label className="rjsf-builder__field">
+                              <span>Unanswered</span>
+                              <select
+                                className="rjsf-builder__select"
+                                aria-label="Unanswered"
+                                value={
+                                  fieldOutputUnansweredOverride(
+                                    selectedComponent
+                                  ) || ""
+                                }
+                                onChange={(event) => {
+                                  const raw = event.target.value;
+                                  const nextUnanswered =
+                                    raw === "dash" || raw === "hide"
+                                      ? (raw as "dash" | "hide")
+                                      : undefined;
+                                  // "Leave out" is also stored the old way so
+                                  // v0.8.0 prints it the same after a rollback.
+                                  updateDefinition((current) => ({
+                                    ...current,
+                                    components: current.components.map(
+                                      (component) =>
+                                        component.id === selectedComponent.id
+                                          ? {
+                                              ...component,
+                                              outputUnanswered: nextUnanswered,
+                                              hideOutputIfEmpty:
+                                                nextUnanswered === "hide"
+                                            }
+                                          : component
+                                    )
+                                  }));
+                                }}
+                              >
+                                <option value="">
+                                  {`Same as form (${
+                                    OUTPUT_UNANSWERED_LABELS[
+                                      outputStyleOptions.outputUnanswered
+                                    ]
+                                  })`}
+                                </option>
+                                <option value="dash">
+                                  {OUTPUT_UNANSWERED_LABELS.dash}
+                                </option>
+                                <option value="hide">
+                                  {OUTPUT_UNANSWERED_LABELS.hide}
+                                </option>
+                              </select>
+                            </label>
                           ) : null}
                           <div className="rjsf-builder__print-example">
                             <div className="rjsf-builder__print-example-title">
@@ -18980,73 +19325,6 @@ export default function FormStudioBuilder(
                               }
                             />{" "}
                           </div>{" "}
-                          </Fragment>
-                          ) : null}
-                          <label className="rjsf-builder__field">
-                            <span>Space above in the document</span>
-                            <select
-                              className="rjsf-builder__select"
-                              value={selectedComponent.outputSpaceBefore || ""}
-                              onChange={(event) => {
-                                const nextSpace = resolveOutputSpace(
-                                  event.target.value
-                                );
-                                updateDefinition((current) => ({
-                                  ...current,
-                                  components: current.components.map(
-                                    (component) =>
-                                      component.id === selectedComponent.id
-                                        ? {
-                                            ...component,
-                                            outputSpaceBefore: nextSpace
-                                          }
-                                        : component
-                                  )
-                                }));
-                              }}
-                            >
-                              <option value="">None</option>
-                              <option value="small">A little</option>
-                              <option value="large">More</option>
-                            </select>
-                          </label>
-                          <label className="rjsf-builder__toggle">
-                            {" "}
-                            <input
-                              type="checkbox"
-                              checked={Boolean(
-                                selectedComponent.hideOutputIfEmpty
-                              )}
-                              onChange={(event) =>
-                                updateDefinition((current) => ({
-                                  ...current,
-                                  components: current.components.map(
-                                    (component) =>
-                                      component.id === selectedComponent.id
-                                        ? {
-                                            ...component,
-                                            hideOutputIfEmpty:
-                                              event.target.checked
-                                          }
-                                        : component
-                                  )
-                                }))
-                              }
-                            />{" "}
-                            <span className="rjsf-builder__toggle-label">
-                              {" "}
-                              Hide field output if empty{" "}
-                              <span
-                                className="rjsf-builder__tooltip-icon"
-                                tabIndex={0}
-                                title="When this option is selected and the user leaves this field blank, it will be omitted from the finalized document output."
-                                aria-label="When this option is selected and the user leaves this field blank, it will be omitted from the finalized document output."
-                              >
-                                {" "}
-                                ?{" "}
-                              </span>{" "}
-                            </span>{" "}
-                          </label>{" "}
                           {supportsPerAnswerOutput(selectedComponent) &&
                           (selectedComponent.options || []).length ? (
                             <div className="rjsf-builder__field">
@@ -19176,11 +19454,47 @@ export default function FormStudioBuilder(
                                 )
                               )}{" "}
                             </div>
-                          ) : null}{" "}
+                          ) : null}
+                          </Fragment>
+                          ) : null}
+                          <label className="rjsf-builder__field">
+                            <span>
+                              {selectedComponent.type === "contentBlock" &&
+                              selectedComponent.blockStyle === "spacer"
+                                ? "Spacer size"
+                                : "Space above in the document"}
+                            </span>
+                            <select
+                              className="rjsf-builder__select"
+                              value={selectedComponent.outputSpaceBefore || ""}
+                              onChange={(event) => {
+                                const nextSpace = resolveOutputSpace(
+                                  event.target.value
+                                );
+                                updateDefinition((current) => ({
+                                  ...current,
+                                  components: current.components.map(
+                                    (component) =>
+                                      component.id === selectedComponent.id
+                                        ? {
+                                            ...component,
+                                            outputSpaceBefore: nextSpace
+                                          }
+                                        : component
+                                  )
+                                }));
+                              }}
+                            >
+                              <option value="">None</option>
+                              <option value="small">A little</option>
+                              <option value="large">More</option>
+                            </select>
+                          </label>
                         </div>
                       )
                     ) : null}{" "}
                     {isDocumentOutputTab &&
+                    showCustomWording &&
                     selectedComponent.type !== "systemDatagrid2" ? (
                       <Fragment>
                         {" "}
