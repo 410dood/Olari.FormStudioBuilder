@@ -4697,3 +4697,205 @@ details.rjsf-builder__group[open] .rjsf-builder__group-chev { transform: rotate(
   color: var(--rb-muted, #6b7280);
   font-size: 13px;
 }
+
+/* ---- Document output style (preview and PDF) -------------------------------
+   The output markup is "<p class=fsdoc-row><strong class=fsdoc-label>Label:
+   </strong> <span class=fsdoc-value>answer</span></p>", which reads correctly
+   with no styles at all. These rules lay it out per the template's choices:
+   layout (beside | above | inline) and density (compact | standard | spacious). */
+.fsdoc {
+  --fsdoc-gap: 2px;
+  --fsdoc-head-gap: 14px;
+  --fsdoc-line: 1.4;
+  --fsdoc-label-col: 32%;
+  --fsdoc-rule: #eef0f4;
+  line-height: var(--fsdoc-line);
+}
+
+.fsdoc--standard {
+  --fsdoc-gap: 5px;
+  --fsdoc-head-gap: 22px;
+  --fsdoc-line: 1.5;
+}
+
+.fsdoc--spacious {
+  --fsdoc-gap: 9px;
+  --fsdoc-head-gap: 30px;
+  --fsdoc-line: 1.6;
+}
+
+.rjsf-builder__document-preview-body .fsdoc p,
+.fsdoc p {
+  margin: 0 0 calc(var(--fsdoc-gap) + 2px);
+}
+
+.fsdoc .fsdoc-label {
+  font-weight: 600;
+}
+
+.fsdoc .fsdoc-empty {
+  color: #98a2b3;
+}
+
+/* Label column, answer beside it. Long answers drop under the label. */
+.rjsf-builder__document-preview-body .fsdoc p.fsdoc-row,
+.fsdoc p.fsdoc-row {
+  margin: 0;
+}
+
+.fsdoc--beside .fsdoc-row {
+  display: grid;
+  grid-template-columns: var(--fsdoc-label-col) minmax(0, 1fr);
+  column-gap: 14px;
+  padding: var(--fsdoc-gap) 0;
+  border-bottom: 1px solid var(--fsdoc-rule);
+  break-inside: avoid;
+}
+
+.fsdoc--beside .fsdoc-row--long,
+.fsdoc--above .fsdoc-row {
+  display: block;
+  padding: var(--fsdoc-gap) 0;
+  border-bottom: 1px solid var(--fsdoc-rule);
+}
+
+.fsdoc--beside .fsdoc-row--long .fsdoc-label,
+.fsdoc--above .fsdoc-row .fsdoc-label {
+  display: block;
+}
+
+.fsdoc--beside .fsdoc-colon,
+.fsdoc--above .fsdoc-colon {
+  display: none;
+}
+
+/* Matrix: title, then one line per row with the answer in a narrow column. */
+.fsdoc .fsdoc-matrix {
+  margin: calc(var(--fsdoc-gap) + 4px) 0;
+}
+
+.fsdoc .fsdoc-matrix-title {
+  margin: 0 0 2px;
+}
+
+.fsdoc--inline p.fsdoc-row {
+  margin: 0 0 calc(var(--fsdoc-gap) + 2px);
+}
+
+.fsdoc--beside .fsdoc-matrix .fsdoc-row,
+.fsdoc--above .fsdoc-matrix .fsdoc-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(14%, max-content);
+  column-gap: 14px;
+  padding-left: 12px;
+}
+
+.fsdoc--beside .fsdoc-matrix .fsdoc-label,
+.fsdoc--above .fsdoc-matrix .fsdoc-label {
+  display: inline;
+  font-weight: 400;
+}
+
+/* Headings: group titles, heading blocks and authored h2/h3. */
+.rjsf-builder__document-preview-body .fsdoc h2,
+.rjsf-builder__document-preview-body .fsdoc h3 {
+  margin: var(--fsdoc-head-gap) 0 calc(var(--fsdoc-gap) + 4px);
+  break-after: avoid;
+}
+
+.rjsf-builder__document-preview-body .fsdoc h2.fsdoc-group,
+.rjsf-builder__document-preview-body .fsdoc h2.fsdoc-heading {
+  font-size: 1.15em;
+  font-weight: 700;
+  line-height: 1.3;
+  padding-bottom: 4px;
+  border-bottom: 2px solid #d0d5dd;
+}
+
+.rjsf-builder__document-preview-body .fsdoc h3 {
+  font-size: 0.95em;
+  font-weight: 700;
+  line-height: 1.35;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding-bottom: 3px;
+  border-bottom: 1px solid #d0d5dd;
+}
+
+.fsdoc > h2:first-child,
+.fsdoc > h3:first-child {
+  margin-top: 2px;
+}
+
+/* "Space above" on an item, and Spacer blocks. */
+.fsdoc .fsdoc-gap--small {
+  height: 12px;
+}
+
+.fsdoc .fsdoc-gap--large {
+  height: 28px;
+}
+
+/* Designer: Document style block on the Document output tab. */
+.rjsf-builder__output-style-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin: 6px 0;
+}
+
+.rjsf-builder__output-style-title {
+  min-width: 150px;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.rjsf-builder__output-style-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.rjsf-builder__output-style-choice.is-active {
+  background: var(--rb-primary, #264ae5);
+  border-color: var(--rb-primary, #264ae5);
+  color: #fff;
+}
+
+.rjsf-builder__output-style-preview {
+  margin-top: 6px;
+  padding: 16px 18px;
+  border: 1px solid var(--rb-border);
+  border-radius: 8px;
+  background: #fff;
+  max-height: 520px;
+  overflow: auto;
+}
+
+/* Designer: per-field "How this prints" chooser and its live example. */
+.rjsf-builder__print-mode {
+  margin: 4px 0 10px;
+}
+
+.rjsf-builder__print-example {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--rb-border);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.rjsf-builder__print-example-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--rb-muted);
+  margin-bottom: 6px;
+}
+
+.rjsf-builder__print-example .rjsf-builder__document-preview-body {
+  max-width: none;
+  margin: 0;
+}

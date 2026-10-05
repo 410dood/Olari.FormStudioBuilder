@@ -1,4 +1,6 @@
 import {
+  createContext,
+  useContext,
   type CSSProperties,
   type DragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -291,6 +293,13 @@ interface FormComponent {
   /** Text blocks (contentBlock): visual role. undefined = paragraph.
    *  Divider and spacer render layout chrome and produce no document text. */
   blockStyle?: "heading1" | "heading2" | "paragraph" | "divider" | "spacer";
+  /** Extra space above this item in the document output ("a little" /
+   *  "more"). On a Spacer block it is the size of the space itself. */
+  outputSpaceBefore?: OutputSpace;
+  /** "under": the answer prints on its own line under the question. Ignored
+   *  for a matrix (it already prints a title and one row per line) and for
+   *  fields with their own wording. undefined = follow the document style. */
+  outputPlacement?: "under";
   /** Date fields: what the field captures. undefined = date only;
    *  "time" / "datetime" absorb the former standalone field types. */
   dateCapture?: "time" | "datetime";
@@ -420,13 +429,28 @@ interface BuilderOptions {
   /** "wizard" fills one section per page with gated Next; "scroll" is the
    *  classic continuous form. */
   fillMode: "scroll" | "wizard";
+  /** Document output style (preview and PDF). One choice per template instead
+   *  of per-field formatting. "inline" is the classic "Label: answer" line. */
+  outputLayout: OutputLayout;
+  outputDensity: OutputDensity;
+  /** Unanswered questions print a dash, or are left out. */
+  outputUnanswered: "dash" | "hide";
+  /** Print group titles as headings. */
+  outputGroupTitles: boolean;
 }
+type OutputLayout = "beside" | "above" | "inline";
+type OutputDensity = "compact" | "standard" | "spacious";
+type OutputSpace = "small" | "large";
 const DEFAULT_BUILDER_OPTIONS: BuilderOptions = {
   snapToGrid: true,
   snapToResize: true,
   labelLayout: "block",
   showLayoutSection: true,
-  fillMode: "scroll"
+  fillMode: "scroll",
+  outputLayout: "beside",
+  outputDensity: "compact",
+  outputUnanswered: "dash",
+  outputGroupTitles: true
 };
 const DEFAULT_FORM: FormDefinition = {
   version: 1,
@@ -2560,11 +2584,233 @@ function asHtmlSnippet(value: string): string {
   }
   return `<p>${trimmed.replace(/\r?\n/g, "<br />")}</p>`;
 }
+// ---- Document output style -------------------------------------------------
+// The output is plain HTML that still reads correctly with no stylesheet
+// ("<strong>Label:</strong> answer" per paragraph). The fsdoc classes let the
+// preview and the PDF lay the same markup out as a label column, a stacked
+// label, or the classic inline line, at three spacing densities.
+const OUTPUT_DASH = "—";
+// The PDF header/footer templates only feed buildPrintDocumentHtml, whose
+// output (resolvedPdfHtmlAttr) no page wires; the real PDF page gets its
+// header and footer from the Mendix page. The designer controls are hidden;
+// stored values and their parsing are kept.
+const SHOW_PDF_HEADER_FOOTER_CONTROLS: boolean = false;
+const OUTPUT_BLOCK_TAG_PATTERN =
+  /<\/?(p|div|h[1-6]|ul|ol|li|table|thead|tbody|tr|td|th|section|article|header|footer|figure|blockquote|pre|hr|dl|dt|dd|img|svg|canvas)\b/i;
+interface OutputItem {
+  kind: "content" | "heading" | "group" | "space";
+  html: string;
+  /** Headings only: 1 = Heading, 2 = Subheading, and so on. */
+  level?: number;
+}
+function resolveOutputSpace(value: unknown): OutputSpace | undefined {
+  const normalized = clean(value).toLowerCase();
+  return normalized === "small" || normalized === "large"
+    ? normalized
+    : undefined;
+}
+function outputGapHtml(size: OutputSpace): string {
+  return `<div class="fsdoc-gap fsdoc-gap--${size}" aria-hidden="true"></div>`;
+}
+function outputValueHtml(
+  tokenKey: string,
+  tokenValues: Record<string, string>
+): string {
+  return replaceOutputTokens(`{${tokenKey}}`, tokenValues)
+    .trim()
+    .replace(/\r?\n/g, "<br />");
+}
+function renderOutputRow(
+  labelHtml: string,
+  valueHtml: string,
+  options: { stacked?: boolean } = {}
+): string {
+  const plainLength = valueHtml.replace(/<[^>]+>/g, "").length;
+  const long =
+    options.stacked || plainLength > 140 || /<br\s*\/?>/i.test(valueHtml);
+  const value = valueHtml
+    ? `<span class="fsdoc-value">${valueHtml}</span>`
+    : `<span class="fsdoc-value fsdoc-empty">${OUTPUT_DASH}</span>`;
+  return `<p class="fsdoc-row${long ? " fsdoc-row--long" : ""}${
+    valueHtml ? "" : " fsdoc-row--empty"
+  }"><strong class="fsdoc-label">${labelHtml}<span class="fsdoc-colon">:</span></strong> ${value}</p>`;
+}
+/** An authored template that is still just "label, then this field's answer"
+ *  (optionally bold, optionally on two lines, optionally with a literal label
+ *  instead of the label token). These print as a normal question/answer row so
+ *  imported templates with mixed bold/plain labels come out consistent.
+ *  Anything else (a sentence, several tokens) is a narrative and is left alone. */
+function parseSimpleLabelValueTemplate(
+  template: string,
+  key: string
+): { labelTemplate: string; stacked: boolean; valueToken: string } | null {
+  // Templates saved by the rich editor are HTML: read bold tags and line
+  // breaks the same way as the older formatting codes. Any other markup means
+  // the author formatted it deliberately, so it stays a narrative.
+  const withoutSimpleTags = template
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/?(strong|b|p|div)>/gi, (tag) =>
+      /^<\/(p|div)>$/i.test(tag) ? "\n" : ""
+    )
+    .replace(/&nbsp;|&#160;/gi, " ");
+  if (/<[a-z/]/i.test(withoutSimpleTags)) {
+    return null;
+  }
+  const trimmed = withoutSimpleTags.trim();
+  // The template must end with this field's own value token.
+  const suffixes = [`{${key}_display}`, `{${key}}`];
+  const suffix = suffixes.find((candidate) => trimmed.endsWith(candidate));
+  if (!suffix) {
+    return null;
+  }
+  const beforeValue = trimmed.slice(0, trimmed.length - suffix.length);
+  const BACKSLASH = String.fromCharCode(92);
+  const lineBreakCodes = [`${BACKSLASH}line`, `${BACKSLASH}pard`, `${BACKSLASH}par`];
+  const stacked =
+    /\n\s*$/.test(beforeValue) ||
+    lineBreakCodes.some((code) => beforeValue.includes(code));
+  let head = beforeValue;
+  lineBreakCodes.forEach((code) => {
+    head = head.split(code).join("");
+  });
+  head = head.trim();
+  // Bold wrappers: "{\b ...}" or "\b ... \b0".
+  const boldOpen = `{${BACKSLASH}b `;
+  const boldRunOpen = `${BACKSLASH}b `;
+  const boldRunClose = `${BACKSLASH}b0`;
+  if (head.startsWith(boldOpen) && head.endsWith("}")) {
+    head = head.slice(boldOpen.length, -1).trim();
+    if (head.endsWith(boldRunClose)) {
+      head = head.slice(0, -boldRunClose.length).trim();
+    }
+  } else if (head.startsWith(boldRunOpen) && head.endsWith(boldRunClose)) {
+    head = head.slice(boldRunOpen.length, -boldRunClose.length).trim();
+  }
+  if (
+    !head ||
+    head.length > 140 ||
+    head.includes("\n") ||
+    head.includes(BACKSLASH) ||
+    /[<>]/.test(head)
+  ) {
+    return null;
+  }
+  const labelToken = `{${key}_label}`;
+  const withoutLabelToken = head.split(labelToken).join("");
+  if (/[{}]/.test(withoutLabelToken)) {
+    return null;
+  }
+  if (!/:$/.test(head) && head !== labelToken) {
+    return null;
+  }
+  return {
+    labelTemplate: head.replace(/\s*:$/, ""),
+    stacked,
+    valueToken: suffix.slice(1, -1)
+  };
+}
+/** Question/answer output for a field that prints as "label, answer". Returns
+ *  null when the value is rich HTML (signature image, table): the caller then
+ *  falls back to the classic template rendering. "" means print nothing. */
+function renderStructuredFieldOutput(
+  component: FormComponent,
+  simple: { labelTemplate: string; stacked: boolean; valueToken: string } | null,
+  tokenValues: Record<string, string>,
+  unanswered: "dash" | "hide"
+): string | null {
+  const labelHtml = simple
+    ? replaceOutputTokens(simple.labelTemplate, tokenValues)
+    : escapeHtml(resolveTokenValue(`${component.key}_label`, tokenValues));
+  if (!simple && component.type === "matrix") {
+    const rows = getMatrixRows(component);
+    if (!rows.length) {
+      return null;
+    }
+    const rowValues = rows.map((row) =>
+      outputValueHtml(`${component.key}_${row.key}`, tokenValues)
+    );
+    if (unanswered === "hide" && rowValues.every((value) => !value)) {
+      return "";
+    }
+    const rowHtml = rows
+      .map((row, index) =>
+        renderOutputRow(
+          escapeHtml(
+            resolveTokenValue(`${component.key}_${row.key}_label`, tokenValues)
+          ),
+          rowValues[index]
+        )
+      )
+      .join("");
+    return `<div class="fsdoc-matrix"><p class="fsdoc-matrix-title"><strong>${labelHtml}:</strong></p>${rowHtml}</div>`;
+  }
+  const valueToken = simple
+    ? simple.valueToken
+    : component.type === "total"
+    ? `${component.key}_display`
+    : component.key;
+  const valueHtml = outputValueHtml(valueToken, tokenValues);
+  if (OUTPUT_BLOCK_TAG_PATTERN.test(valueHtml)) {
+    return null;
+  }
+  if (!valueHtml && unanswered === "hide") {
+    return "";
+  }
+  return renderOutputRow(labelHtml, valueHtml, {
+    stacked: simple?.stacked || component.outputPlacement === "under"
+  });
+}
+/** Drops headings that ended up with nothing under them. Group titles are
+ *  always checked; authored headings only when unanswered questions are
+ *  hidden (otherwise every question prints at least a dash).
+ *  A heading owns what follows it up to the next heading of the same or a
+ *  higher level. A kept Subheading counts as content for the Heading above
+ *  it; a dropped one does not. */
+function pruneEmptyOutputHeadings(
+  items: OutputItem[],
+  pruneAuthoredHeadings: boolean
+): OutputItem[] {
+  const kept: OutputItem[] = [];
+  const LEVELS = 8;
+  // contentBelow[level]: something printable has been seen (walking up from
+  // the end) since the last heading of that level or higher. 0 = group title.
+  const contentBelow: boolean[] = new Array(LEVELS).fill(false);
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item.kind === "content") {
+      contentBelow.fill(true);
+      kept.push(item);
+    } else if (item.kind === "heading" || item.kind === "group") {
+      const level =
+        item.kind === "group"
+          ? 0
+          : Math.min(Math.max(item.level || 1, 1), LEVELS - 1);
+      const keep =
+        contentBelow[level] ||
+        (item.kind === "heading" && !pruneAuthoredHeadings);
+      if (keep) {
+        kept.push(item);
+      }
+      for (let other = 0; other < LEVELS; other += 1) {
+        if (other >= level) {
+          contentBelow[other] = false;
+        } else if (keep) {
+          contentBelow[other] = true;
+        }
+      }
+    } else {
+      kept.push(item);
+    }
+  }
+  return kept.reverse();
+}
 function resolveDocumentOutputHtml(
   definition: FormDefinition,
   data: JsonObject,
   contextTokens: Record<string, string>,
-  systemSectionHtmlBySlot: Record<string, string> = {}
+  systemSectionHtmlBySlot: Record<string, string> = {},
+  /** Render only this component (the designer's "Prints as" example). */
+  onlyComponentId?: string
 ): string {
   const sectionSwitchableByKey = buildSectionSwitchableMap(definition);
   const sectionVisibilityByKey = applySectionVisibilityLegacyFallback(
@@ -2575,31 +2821,75 @@ function resolveDocumentOutputHtml(
   const componentsByKey = new Map(
     definition.components.map((component) => [component.key, component])
   );
-  const snippets = orderComponentsBySection(definition.components)
-    .map((component) => {
+  const outputStyle = normalizeBuilderOptions(definition.builderOptions);
+  const content = (html: string): OutputItem | null =>
+    clean(html) ? { kind: "content", html } : null;
+  const renderComponent = (component: FormComponent): OutputItem | null => {
+      const isSpacer =
+        component.type === "contentBlock" && component.blockStyle === "spacer";
       const perAnswerTemplate = getPerAnswerOutputTemplate(component, data);
       if (perAnswerTemplate != null && !clean(perAnswerTemplate)) {
-        return "";
+        return null;
       }
       const template =
         perAnswerTemplate != null
           ? perAnswerTemplate
           : getEffectiveDocumentOutputTemplate(component);
-      if (!template && component.type !== "systemDatagrid2") {
-        return "";
+      if (!template && component.type !== "systemDatagrid2" && !isSpacer) {
+        return null;
       }
       const sectionKey = resolveComponentSectionKey(component);
       const sectionIsSwitchable = Boolean(sectionSwitchableByKey[sectionKey]);
       const sectionIsVisible =
         !sectionIsSwitchable || sectionVisibilityByKey[sectionKey] !== false;
       if (!sectionIsVisible) {
-        return "";
+        return null;
       }
       if (!isComponentVisibleForSummary(component, data, componentsByKey)) {
-        return "";
+        return null;
+      }
+      if (isSpacer) {
+        // A Spacer block prints as vertical space (it used to print nothing).
+        return {
+          kind: "space",
+          html: outputGapHtml(component.outputSpaceBefore || "small")
+        };
       }
       if (component.hideOutputIfEmpty && !hasOutputValue(component, data)) {
-        return "";
+        return null;
+      }
+      // Question/answer fields: the default output, or an authored template
+      // that is still only "label, then the answer".
+      if (
+        perAnswerTemplate == null &&
+        component.type !== "contentBlock" &&
+        component.type !== "systemDatagrid2" &&
+        component.type !== "datagrid"
+      ) {
+        const simple = hasExplicitDocumentOutputTemplate(component)
+          ? parseSimpleLabelValueTemplate(template, component.key)
+          : null;
+        if (simple || !hasExplicitDocumentOutputTemplate(component)) {
+          const structured = renderStructuredFieldOutput(
+            component,
+            simple,
+            tokenValues,
+            outputStyle.outputUnanswered
+          );
+          if (structured != null) {
+            return content(structured);
+          }
+        }
+        // A sentence written around this field's answer ("{client} reports
+        // {answer} feeling ...") is left out while the question is unanswered;
+        // otherwise it prints with a hole in it.
+        if (
+          hasExplicitDocumentOutputTemplate(component) &&
+          extractTemplateTokens(template).includes(component.key) &&
+          !clean(resolveTokenValue(component.key, tokenValues))
+        ) {
+          return null;
+        }
       }
       if (
         (perAnswerTemplate != null ||
@@ -2609,7 +2899,7 @@ function resolveDocumentOutputHtml(
         component.type !== "datagrid" &&
         isNarrativeWithAllValueTokensEmpty(template, tokenValues)
       ) {
-        return "";
+        return null;
       }
       if (component.type === "systemDatagrid2") {
         const slotKey = clean(component.systemTemplateSlotProperty);
@@ -2619,7 +2909,7 @@ function resolveDocumentOutputHtml(
             ""
           : "";
         if (!hasMeaningfulHtml(snippet)) {
-          return "";
+          return null;
         }
         const label = clean(component.label);
         const labelHtml =
@@ -2628,20 +2918,116 @@ function resolveDocumentOutputHtml(
                 label
               )}</div>`
             : "";
-        return `<div class="rjsf-builder__pdf-system-block">${labelHtml}${snippet}</div>`;
-      }
-      if (component.type === "datagrid") {
-        return resolveDataGridTemplateHtml(
-          component,
-          template,
-          data,
-          tokenValues
+        return content(
+          `<div class="rjsf-builder__pdf-system-block">${labelHtml}${snippet}</div>`
         );
       }
-      return asHtmlSnippet(replaceOutputTokens(template, tokenValues));
-    })
-    .filter((snippet) => clean(snippet));
-  return snippets.join("\n");
+      if (component.type === "datagrid") {
+        return content(
+          resolveDataGridTemplateHtml(component, template, data, tokenValues)
+        );
+      }
+      const html = asHtmlSnippet(replaceOutputTokens(template, tokenValues));
+      if (!clean(html)) {
+        return null;
+      }
+      if (component.type === "contentBlock") {
+        const headingLevel =
+          component.blockStyle === "heading1"
+            ? 1
+            : component.blockStyle === "heading2"
+            ? 2
+            : 0;
+        if (headingLevel && !hasExplicitDocumentOutputTemplate(component)) {
+          // Heading blocks print as real headings (they were a bold line).
+          const inner = OUTPUT_BLOCK_TAG_PATTERN.test(
+            html.replace(/^<p>|<\/p>$/g, "")
+          )
+            ? null
+            : html
+                .replace(/^<p>|<\/p>$/g, "")
+                .replace(/^<strong>([\s\S]*)<\/strong>$/, "$1");
+          if (inner != null) {
+            const tag = headingLevel === 1 ? "h2" : "h3";
+            return {
+              kind: "heading",
+              level: headingLevel,
+              html: `<${tag} class="fsdoc-heading fsdoc-heading--${headingLevel}">${inner}</${tag}>`
+            };
+          }
+        }
+        const authoredHeading = /^\s*<h([1-6])\b/i.exec(html);
+        if (authoredHeading) {
+          // The editor's H / h buttons write <h2> / <h3>, the same tags the
+          // Heading and Subheading blocks print as.
+          return {
+            kind: "heading",
+            level: Math.max(Number(authoredHeading[1]) - 1, 1),
+            html
+          };
+        }
+      }
+      return content(html);
+  };
+  const sectionTitleByKey = new Map<string, string>();
+  definition.components.forEach((component) => {
+    const title = normalizeSectionName(component.section);
+    const key = resolveComponentSectionKey(component);
+    if (title && !sectionTitleByKey.has(key)) {
+      sectionTitleByKey.set(key, title);
+    }
+  });
+  const documentTitle = clean(definition.title).toLowerCase();
+  const items: OutputItem[] = [];
+  let lastSectionKey: string | null = null;
+  orderComponentsBySection(definition.components).forEach((component) => {
+    if (onlyComponentId && component.id !== onlyComponentId) {
+      return;
+    }
+    const item = renderComponent(component);
+    if (!item) {
+      return;
+    }
+    const sectionKey = resolveComponentSectionKey(component);
+    if (sectionKey !== lastSectionKey && !onlyComponentId) {
+      lastSectionKey = sectionKey;
+      const title = sectionTitleByKey.get(sectionKey);
+      // Skip a group title that would only repeat the document title or the
+      // label of the built-in grid it contains.
+      const repeatsBlockLabel =
+        component.type === "systemDatagrid2" &&
+        !component.hideLabel &&
+        clean(component.label).toLowerCase() === clean(title).toLowerCase();
+      if (
+        outputStyle.outputGroupTitles &&
+        title &&
+        title.toLowerCase() !== documentTitle &&
+        !repeatsBlockLabel
+      ) {
+        items.push({
+          kind: "group",
+          html: `<h2 class="fsdoc-group">${escapeHtml(title)}</h2>`
+        });
+      }
+    }
+    if (component.outputSpaceBefore && item.kind !== "space") {
+      items.push({
+        kind: "space",
+        html: outputGapHtml(component.outputSpaceBefore)
+      });
+    }
+    items.push(item);
+  });
+  const printed = pruneEmptyOutputHeadings(
+    items,
+    outputStyle.outputUnanswered === "hide"
+  );
+  if (!printed.some((item) => item.kind !== "space")) {
+    return "";
+  }
+  return `<div class="fsdoc fsdoc--${outputStyle.outputLayout} fsdoc--${
+    outputStyle.outputDensity
+  }">\n${printed.map((item) => item.html).join("\n")}\n</div>`;
 }
 function hasMeaningfulHtml(value: string): boolean {
   if (!clean(value)) {
@@ -3332,6 +3718,37 @@ function buildPrintDocumentHtml(
         title
       )}</h1>${descriptionHtml}</header>`;
   return `<!DOCTYPE html><html class="rjsf-builder__pdf-html"><head><style>${PDF_PRINT_SHELL_STYLES}</style></head><body class="rjsf-builder__pdf-body"><article class="rjsf-builder__pdf-document">${titleBlock}${customHeaderBlock}${bodyHtml}${customFooterBlock}</article></body></html>`;
+}
+/** A stand-in answer for the designer's "Prints as" example when the field
+ *  has no answer in the Preview tab yet. */
+function buildSampleAnswer(component: FormComponent): unknown {
+  const firstOption = (component.options || [])[0];
+  switch (component.type) {
+    case "matrix":
+      return getMatrixRows(component).reduce((map, row) => {
+        if (firstOption) {
+          map[row.key] = firstOption;
+        }
+        return map;
+      }, {} as JsonObject);
+    case "yesno":
+      return "Yes";
+    case "checkbox":
+      return true;
+    case "number":
+      return 3;
+    case "select":
+    case "radio":
+      return component.multiSelect
+        ? firstOption
+          ? [firstOption]
+          : undefined
+        : firstOption;
+    case "text":
+      return "Sample answer";
+    default:
+      return undefined;
+  }
 }
 function buildResolvedOutputArtifacts(
   definition: FormDefinition,
@@ -4114,6 +4531,15 @@ function parseOptions(
     optionLabels: Object.keys(optionLabels).length ? optionLabels : undefined,
     optionScores: Object.keys(optionScores).length ? optionScores : undefined
   };
+}
+// Option / matrix-row editors: keep each row's id when the draft is rebuilt
+// from the saved definition. The id is the React key; a new id on every save
+// remounted the inputs, so the box the user had just clicked into lost focus
+// and the next value typed was dropped (scores entered row by row vanished).
+function keepDraftRowIds<T extends { id: string }>(prev: T[], next: T[]): T[] {
+  return next.map((row, index) =>
+    prev[index] ? { ...row, id: prev[index].id } : row
+  );
 }
 function buildChoiceOptionDrafts(
   component: FormComponent
@@ -4997,7 +5423,20 @@ function normalizeBuilderOptions(value: any): BuilderOptions {
         : undefined;
     })(),
     showLayoutSection: value?.showLayoutSection !== false,
-    fillMode: clean(value?.fillMode).toLowerCase() === "wizard" ? "wizard" : "scroll"
+    fillMode: clean(value?.fillMode).toLowerCase() === "wizard" ? "wizard" : "scroll",
+    outputLayout: (() => {
+      const layout = clean(value?.outputLayout).toLowerCase();
+      return layout === "above" || layout === "inline" ? layout : "beside";
+    })(),
+    outputDensity: (() => {
+      const density = clean(value?.outputDensity).toLowerCase();
+      return density === "standard" || density === "spacious"
+        ? density
+        : "compact";
+    })(),
+    outputUnanswered:
+      clean(value?.outputUnanswered).toLowerCase() === "hide" ? "hide" : "dash",
+    outputGroupTitles: value?.outputGroupTitles !== false
   };
 }
 function snapColumnSpan(rawValue: number, snapEnabled: boolean): number {
@@ -5422,6 +5861,11 @@ function normalizeComponent(item: any, index: number): FormComponent {
     textStyle,
     textFormat,
     blockStyle,
+    outputSpaceBefore: resolveOutputSpace(item?.outputSpaceBefore),
+    outputPlacement:
+      clean(item?.outputPlacement).toLowerCase() === "under"
+        ? "under"
+        : undefined,
     sectionSwitchEnabled: toBoolean(
       item?.sectionSwitchEnabled ??
         item?.allowSectionToggle ??
@@ -5917,6 +6361,58 @@ function sanitizeValueForComponent(
     return undefined;
   }
   return String(value);
+}
+/** The data handed to the RJSF <Form>. RJSF fills an unanswered matrix (an
+ *  object field) with {} while sanitizeFormData drops it. When the two differ
+ *  during a user change, RJSF 6.3 skips its own state update, so group
+ *  captions and token blocks stop refreshing until the matrix has an answer.
+ *  Adding the same {} here keeps both sides equal. Display only: saved
+ *  answers still go through sanitizeFormData, which drops the empty object. */
+function withEmptyMatrixObjects(
+  data: JsonObject,
+  definition: FormDefinition
+): JsonObject {
+  let next = data;
+  definition.components.forEach((component) => {
+    if (component.type !== "matrix") {
+      return;
+    }
+    const groupKey = component.repeatGroup?.key;
+    if (!groupKey) {
+      if (data[component.key] == null) {
+        if (next === data) {
+          next = { ...data };
+        }
+        next[component.key] = {};
+      }
+      return;
+    }
+    const rows = next[groupKey];
+    if (
+      !Array.isArray(rows) ||
+      !rows.some(
+        (row) =>
+          row &&
+          typeof row === "object" &&
+          !Array.isArray(row) &&
+          (row as JsonObject)[component.key] == null
+      )
+    ) {
+      return;
+    }
+    if (next === data) {
+      next = { ...data };
+    }
+    next[groupKey] = rows.map((row) =>
+      row &&
+      typeof row === "object" &&
+      !Array.isArray(row) &&
+      (row as JsonObject)[component.key] == null
+        ? { ...(row as JsonObject), [component.key]: {} }
+        : row
+    ) as JsonObject[];
+  });
+  return next;
 }
 function sanitizeFormData(
   rawData: JsonObject,
@@ -6995,9 +7491,11 @@ function listPropertyKeyVariants(raw: unknown): string[] {
 }
 function resolvePreviewPropertyKey(
   property: any,
-  componentMetaByKey: Record<string, unknown>
+  componentMetaByKey: Record<string, unknown>,
+  knownKeySet?: Set<string>
 ): string {
-  const knownKeys = new Set(Object.keys(componentMetaByKey || {}));
+  const knownKeys =
+    knownKeySet || new Set(Object.keys(componentMetaByKey || {}));
   const rawCandidates = [
     property?.name,
     property?.fieldPathId?.$id,
@@ -7370,7 +7868,72 @@ function htmlProp(html: string): { __html: string } {
   }
   return prop;
 }
+// RJSF's TextareaWidget with one difference: a constant defaultValue. For a
+// controlled <textarea>, React otherwise copies the value into
+// node.defaultValue on every keystroke, which replaces the textarea's text
+// child; Mendix's dialog watches child changes and re-measures the page
+// (~25-50 ms of layout per key on a long form).
+function StableTextareaWidget(props: any): ReactElement {
+  const {
+    id,
+    options = {},
+    placeholder,
+    value,
+    required,
+    disabled,
+    readonly,
+    autofocus = false,
+    onChange,
+    onBlur,
+    onFocus,
+    htmlName
+  } = props;
+  const describedBy = `${id}__error ${id}__description ${id}__help`;
+  return (
+    <textarea
+      id={id}
+      name={htmlName || id}
+      className="form-control"
+      value={value ? value : ""}
+      defaultValue=""
+      placeholder={placeholder}
+      required={required}
+      disabled={disabled}
+      readOnly={readonly}
+      autoFocus={autofocus}
+      rows={options.rows}
+      onBlur={(event) => onBlur(id, event.target && event.target.value)}
+      onFocus={(event) => onFocus(id, event.target && event.target.value)}
+      onChange={(event) =>
+        onChange(
+          event.target.value === "" ? options.emptyValue : event.target.value
+        )
+      }
+      aria-describedby={describedBy}
+    />
+  );
+}
+// Values that change while the user types (answer tokens, per-group counts,
+// the active group). They used to travel in RJSF's formContext, which made
+// every field's props differ on every keystroke, so RJSF redrew all fields.
+// Only content blocks and section headers read them, through this context.
+interface FsLiveValues {
+  contentBlockTokens?: Record<string, string>;
+  sectionStatsByKey?: Record<
+    string,
+    {
+      reqTotal: number;
+      reqDone: number;
+      prefilled: number;
+      fields: number;
+      completed: number;
+    }
+  >;
+  activeSectionKey?: string;
+}
+const FsLiveContext = createContext<FsLiveValues | null>(null);
 function ContentBlockWidget(props: any): ReactElement {
+  const live = useContext(FsLiveContext);
   const options = (props?.options || {}) as {
     contentText?: unknown;
     blockStyle?: unknown;
@@ -7437,7 +8000,8 @@ function ContentBlockWidget(props: any): ReactElement {
       />
     );
   }
-  const tokens = formContext?.contentBlockTokens || {};
+  const tokens =
+    live?.contentBlockTokens || formContext?.contentBlockTokens || {};
   const html = asHtmlSnippet(replaceOutputTokens(contentText, tokens));
   return (
     <div
@@ -8350,6 +8914,7 @@ function ArrayFieldItemTemplate(props: any): ReactElement {
   );
 }
 function ObjectTemplate(props: any): ReactElement {
+  const live = useContext(FsLiveContext);
   const sections: Record<
     string,
     {
@@ -8620,11 +9185,25 @@ function ObjectTemplate(props: any): ReactElement {
     }, 1400);
     return () => window.clearTimeout(timerId);
   }, [previewScrollRequest, previewScrollToSectionKey]);
+  // Resolve each property's key once per render. Doing it inside the sort
+  // comparator rebuilt the full key set on every comparison (the single
+  // largest cost of a keystroke on a 200-field form).
+  const sortMetaByKey = formContext.componentMetaByKey || {};
+  const sortKnownKeys = new Set(Object.keys(sortMetaByKey));
+  const resolvedPropertyKeys = new Map<any, string>();
+  const propertyKeyOf = (property: any): string => {
+    let key = resolvedPropertyKeys.get(property);
+    if (key === undefined) {
+      key = resolvePreviewPropertyKey(property, sortMetaByKey, sortKnownKeys);
+      resolvedPropertyKeys.set(property, key);
+    }
+    return key;
+  };
   const orderedProperties = [...(props?.properties || [])].sort(
     (a: any, b: any) => {
       const componentMetaByKey = formContext.componentMetaByKey || {};
-      const aKey = resolvePreviewPropertyKey(a, componentMetaByKey);
-      const bKey = resolvePreviewPropertyKey(b, componentMetaByKey);
+      const aKey = propertyKeyOf(a);
+      const bKey = propertyKeyOf(b);
       const aMeta = componentMetaByKey[aKey];
       const bMeta = componentMetaByKey[bKey];
       const aOrder = Number.isFinite(Number(aMeta?.orderIndex))
@@ -8644,10 +9223,7 @@ function ObjectTemplate(props: any): ReactElement {
     if (property?.hidden) {
       return;
     }
-    const key = resolvePreviewPropertyKey(
-      property,
-      formContext.componentMetaByKey || {}
-    );
+    const key = propertyKeyOf(property);
     const meta = formContext.componentMetaByKey?.[key];
     const options = property?.uiSchema?.["ui:options"] || {};
     // Group key: stable sectionId when the definition carries one, else the
@@ -8778,7 +9354,15 @@ function ObjectTemplate(props: any): ReactElement {
   const [sectionTitleDrafts, setSectionTitleDrafts] = useState<
     Record<string, string>
   >({});
+  // Sections already seen: "collapsed by default" applies once, when a section
+  // first appears. Re-applying it on every run re-collapsed a section the user
+  // had just expanded.
+  const seenCollapsibleKeysRef = useRef<Set<string> | null>(null);
+  if (seenCollapsibleKeysRef.current === null) {
+    seenCollapsibleKeysRef.current = new Set(collapsibleSectionKeys);
+  }
   useEffect(() => {
+    const seen = seenCollapsibleKeysRef.current as Set<string>;
     setCollapsed((prev) => {
       const next = new Set<string>();
       orderedSections.forEach((section) => {
@@ -8787,10 +9371,26 @@ function ObjectTemplate(props: any): ReactElement {
         }
         if (prev.has(section.key)) {
           next.add(section.key);
-        } else if (section.collapsedByDefault) {
+        } else if (section.collapsedByDefault && !seen.has(section.key)) {
           next.add(section.key);
         }
       });
+      collapsibleSectionKeySet.forEach((key) => seen.add(key));
+      // orderedSections is rebuilt on every render, so this effect runs after
+      // every render. Returning a new Set each time re-rendered the form in an
+      // endless loop (a full CPU core while idle); keep the same state object
+      // when nothing changed.
+      if (next.size === prev.size) {
+        let same = true;
+        next.forEach((key) => {
+          if (!prev.has(key)) {
+            same = false;
+          }
+        });
+        if (same) {
+          return prev;
+        }
+      }
       return next;
     });
   }, [collapsibleSectionKeySet, orderedSections]);
@@ -9432,7 +10032,9 @@ function ObjectTemplate(props: any): ReactElement {
     : -1;
   const wizardActiveStats =
     wizard && wizardActiveKey
-      ? formContext.sectionStatsByKey?.[wizardActiveKey]
+      ? (live?.sectionStatsByKey || formContext.sectionStatsByKey)?.[
+          wizardActiveKey
+        ]
       : undefined;
   const wizardNextBlocked = Boolean(
     wizardActiveStats && wizardActiveStats.reqDone < wizardActiveStats.reqTotal
@@ -9501,12 +10103,17 @@ function ObjectTemplate(props: any): ReactElement {
         // Root only: nested ObjectTemplates (repeat-group rows) share the same
         // section keys, and whole-section aggregates are wrong at row scope.
         const sectionStats = isRootObjectTemplate
-          ? formContext.sectionStatsByKey?.[section.key]
+          ? (live?.sectionStatsByKey || formContext.sectionStatsByKey)?.[
+              section.key
+            ]
           : undefined;
+        const activeSectionKey = live
+          ? live.activeSectionKey
+          : formContext.activeSectionKey;
         const sectionIsActive =
           isRootObjectTemplate &&
-          Boolean(formContext.activeSectionKey) &&
-          formContext.activeSectionKey === section.key;
+          Boolean(activeSectionKey) &&
+          activeSectionKey === section.key;
         const gapKey = `__gap__${section.key}`;
         const gapZonesEnabled = Boolean(
           isRootObjectTemplate && onPreviewGapDrop && !wizard
@@ -10194,7 +10801,17 @@ function templateValueToEditorHtml(value: string): string {
   if (/<\/?[a-z][\s\S]*>/i.test(raw)) {
     return raw;
   }
-  return escapeHtml(raw).replace(/\r?\n/g, "<br />");
+  // Older templates carry formatting codes such as "{\b Label:}". Show them
+  // as real bold / italic / underline instead of the raw code; the editor
+  // saves HTML from then on.
+  const inner = "((?:[^{}]|\\{[^{}]*\\})+?)";
+  const code = (letter: string): RegExp =>
+    new RegExp(`\\{\\\\${letter}\\s+${inner}\\}`, "g");
+  return escapeHtml(raw)
+    .replace(code("b"), "<strong>$1</strong>")
+    .replace(code("i"), "<em>$1</em>")
+    .replace(code("ul"), "<u>$1</u>")
+    .replace(/\r?\n/g, "<br />");
 }
 function editorHtmlToTemplateValue(html: string): string {
   const textOnly = html
@@ -10261,6 +10878,11 @@ const RichTemplateEditor = forwardRef<
   const { value, onChange, ariaLabel, placeholder } = props;
   const editorRef = useRef<HTMLDivElement | null>(null);
   const lastEmittedRef = useRef<string | null>(null);
+  // What the editor showed right after the value was loaded. The editor
+  // rarely shows a template the way it is stored (line breaks become <br>,
+  // formatting codes become bold), so until the user really changes it,
+  // clicking in and out must not save the editor's HTML as the template.
+  const pristineHtmlRef = useRef<string | null>(null);
   const savedRangeRef = useRef<Range | null>(null);
   useEffect(() => {
     const editor = editorRef.current;
@@ -10275,6 +10897,7 @@ const RichTemplateEditor = forwardRef<
       editor.innerHTML = html;
       savedRangeRef.current = null;
     }
+    pristineHtmlRef.current = editor.innerHTML;
     lastEmittedRef.current = value;
   }, [value]);
   const debounceTimerRef = useRef<number | null>(null);
@@ -10289,10 +10912,14 @@ const RichTemplateEditor = forwardRef<
       return;
     }
     dirtyRef.current = false;
+    if (editor.innerHTML === pristineHtmlRef.current) {
+      return;
+    }
     const next = editorHtmlToTemplateValue(editor.innerHTML);
     if (next === lastEmittedRef.current) {
       return;
     }
+    pristineHtmlRef.current = null;
     lastEmittedRef.current = next;
     onChange(next);
   }, [onChange]);
@@ -11383,12 +12010,6 @@ export default function FormStudioBuilder(
     document.addEventListener("pointerdown", onPointerDown);
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [formSettingsOpen]);
-  const [tokenPreviewMode, setTokenPreviewMode] = useState<"html" | "rendered">(
-    "rendered"
-  );
-  const [documentPreviewMode, setDocumentPreviewMode] = useState<
-    "html" | "rendered"
-  >("rendered");
   const [documentTemplateTarget, setDocumentTemplateTarget] = useState<
     "header" | "footer"
   >("header");
@@ -11724,6 +12345,16 @@ export default function FormStudioBuilder(
         : formData,
     [tokenPrefillEnabled, formData, definition, tokenContext]
   );
+  // What the RJSF forms receive (see withEmptyMatrixObjects). Counts, tokens
+  // and saving keep using formData / viewerFormData.
+  const rjsfViewerFormData = useMemo(
+    () => withEmptyMatrixObjects(viewerFormData, definition),
+    [viewerFormData, definition]
+  );
+  const rjsfFormData = useMemo(
+    () => withEmptyMatrixObjects(formData, definition),
+    [formData, definition]
+  );
   const prefilledKeys = useMemo(
     () =>
       tokenPrefillEnabled
@@ -11969,24 +12600,32 @@ export default function FormStudioBuilder(
   const isPropertiesTab = rightPanelTab === "properties";
   const isDocumentOutputTab = rightPanelTab === "documentOutput";
   const isValidationTab = rightPanelTab === "validation";
+  const draftComponentIdRef = useRef<string | null>(null);
   useEffect(() => {
+    const sameDraftComponent =
+      draftComponentIdRef.current === (selectedComponent?.id || null);
+    draftComponentIdRef.current = selectedComponent?.id || null;
     if (
       selectedComponent &&
       (selectedComponent.type === "select" ||
         selectedComponent.type === "radio" ||
         selectedComponent.type === "matrix")
     ) {
-      setChoiceOptionsDraft(buildChoiceOptionDrafts(selectedComponent));
+      const nextDrafts = buildChoiceOptionDrafts(selectedComponent);
+      setChoiceOptionsDraft((prev) =>
+        sameDraftComponent ? keepDraftRowIds(prev, nextDrafts) : nextDrafts
+      );
     } else {
       setChoiceOptionsDraft([]);
     }
     if (selectedComponent && selectedComponent.type === "matrix") {
-      setMatrixRowsDraft(
-        getMatrixRows(selectedComponent).map((row) => ({
-          id: makeId("mrow"),
-          key: row.key,
-          label: row.label
-        }))
+      const nextRows = getMatrixRows(selectedComponent).map((row) => ({
+        id: makeId("mrow"),
+        key: row.key,
+        label: row.label
+      }));
+      setMatrixRowsDraft((prev) =>
+        sameDraftComponent ? keepDraftRowIds(prev, nextRows) : nextRows
       );
     } else {
       setMatrixRowsDraft([]);
@@ -12276,100 +12915,194 @@ export default function FormStudioBuilder(
         : "",
     [selectedComponent]
   );
-  const selectedComponentTokenPreview = useMemo(() => {
-    if (!selectedComponent) {
-      return {
-        outputHtml: "",
-        tokenRows: [] as Array<{ key: string; value: string }>
-      };
+  // "Prints as" example for the selected field: the real output for just this
+  // field, with a stand-in answer when the Preview tab has none.
+  const selectedComponentPrintExample = useMemo(() => {
+    if (!selectedComponent || !isDocumentOutputTab) {
+      return { html: "", usesSample: false };
     }
-    const template = selectedComponentTemplateValue;
-    if (!template) {
-      return {
-        outputHtml: "",
-        tokenRows: [] as Array<{ key: string; value: string }>
-      };
-    }
-    if (selectedComponent.type === "systemDatagrid2") {
-      return { outputHtml: "", tokenRows: [] };
-    }
-    const tokenValues = buildTokenScope(definition, formData, tokenContext);
-    if (selectedComponent.type === "datagrid") {
-      const rows =
-        sanitizeDataGridRows(
-          formData[selectedComponent.key],
-          selectedComponent
-        ) || [];
-      const firstRow = rows[0];
-      if (firstRow) {
-        addToken(tokenValues, "rowindex", 0);
-        addToken(tokenValues, "row_number", 1);
-        const rowIdKey = clean(selectedComponent.datagridRowIdKey);
-        if (rowIdKey) {
-          addToken(tokenValues, rowIdKey, firstRow[rowIdKey]);
-        }
-        selectedDataGridColumns.forEach((column) => {
-          addToken(tokenValues, column.key, firstRow[column.key]);
-          addToken(
-            tokenValues,
-            `${column.key}_label`,
-            stripTrailingColon(column.label || column.key)
-          );
-          addToken(
-            tokenValues,
-            `${selectedComponent.key}_${column.key}`,
-            firstRow[column.key]
-          );
-        });
-      }
-    }
-    const tokenRows = extractTemplateTokens(template).map((key) => ({
-      key,
-      value: resolveTokenValue(key, tokenValues)
-    }));
-    const outputHtml =
-      selectedComponent.type === "datagrid"
-        ? resolveDataGridTemplateHtml(
-            selectedComponent,
-            template,
-            formData,
-            tokenValues
-          )
-        : asHtmlSnippet(replaceOutputTokens(template, tokenValues));
-    return { outputHtml, tokenRows };
+    const answered = hasOutputValue(selectedComponent, formData);
+    const sample = answered ? undefined : buildSampleAnswer(selectedComponent);
+    const exampleData =
+      sample === undefined
+        ? formData
+        : { ...formData, [selectedComponent.key]: sample as any };
+    return {
+      html: resolveDocumentOutputHtml(
+        definition,
+        exampleData,
+        tokenContext,
+        systemSectionHtmlBySlot,
+        selectedComponent.id
+      ),
+      usesSample: sample !== undefined
+    };
   }, [
     selectedComponent,
-    selectedComponentTemplateValue,
+    isDocumentOutputTab,
     definition,
     formData,
     tokenContext,
-    selectedDataGridColumns
+    systemSectionHtmlBySlot
   ]);
-  const finalDocumentOutputHtml = useMemo(
-    () =>
-      buildResolvedOutputArtifacts(
-        definition,
-        formData,
-        tokenContext,
-        systemSectionHtmlBySlot
-      ).pdfHtml,
-    [definition, formData, tokenContext, systemSectionHtmlBySlot]
+  const selectedComponentOutputMode: "standard" | "under" | "custom" = (() => {
+    if (!selectedComponent) {
+      return "standard";
+    }
+    if (
+      selectedComponent.type === "contentBlock" ||
+      selectedComponent.type === "datagrid"
+    ) {
+      return "custom";
+    }
+    // "Answer under the question" has no meaning for a matrix.
+    const placedUnder =
+      selectedComponent.outputPlacement === "under" &&
+      selectedComponent.type !== "matrix";
+    if (!hasExplicitDocumentOutputTemplate(selectedComponent)) {
+      return placedUnder ? "under" : "standard";
+    }
+    const simple = parseSimpleLabelValueTemplate(
+      str(selectedComponent.documentOutputTemplate),
+      selectedComponent.key
+    );
+    if (simple && simple.labelTemplate === `{${selectedComponent.key}_label}`) {
+      return simple.stacked || placedUnder ? "under" : "standard";
+    }
+    return "custom";
+  })();
+  // "My own wording" stays open for the field it was opened on, even while the
+  // text is still a plain "label: answer".
+  const [customWordingOpenId, setCustomWordingOpenId] = useState<string | null>(
+    null
   );
-  const documentPreviewBodyHtml = useMemo(
+  const showCustomWording =
+    Boolean(selectedComponent) &&
+    (selectedComponentOutputMode === "custom" ||
+      customWordingOpenId === selectedComponent?.id);
+  // The output HTML is only shown by the viewer's document preview and by the
+  // designer's Document output tab. Building it on every render cost two full
+  // document builds per keystroke while filling in a form.
+  const outputHtmlShown =
+    props.viewMode === "viewer"
+      ? resolveBooleanSetting(props.showDocumentPreview, false)
+      : builderTab === "documentOutput";
+  const shownOutputArtifacts = useMemo(
     () =>
-      buildResolvedOutputArtifacts(
-        definition,
-        formData,
-        tokenContext,
-        systemSectionHtmlBySlot
-      ).bodyHtml,
-    [definition, formData, tokenContext, systemSectionHtmlBySlot]
+      outputHtmlShown
+        ? buildResolvedOutputArtifacts(
+            definition,
+            formData,
+            tokenContext,
+            systemSectionHtmlBySlot
+          )
+        : null,
+    [outputHtmlShown, definition, formData, tokenContext, systemSectionHtmlBySlot]
   );
+  const documentPreviewBodyHtml = shownOutputArtifacts?.bodyHtml || "";
+  const outputStyleOptions = normalizeBuilderOptions(definition.builderOptions);
   const documentOutputWorkspace = (
     <div className="rjsf-builder__document-output-layout">
       {" "}
       <div className="rjsf-builder__document-output-config">
         {" "}
+        <div className="rjsf-builder__block rjsf-builder__output-style">
+          <div className="rjsf-builder__subtitle">Document style</div>
+          <div className="rjsf-builder__help">
+            How answers print in the preview and the PDF. These apply to the
+            whole form; sentences you wrote yourself are left as written.
+          </div>
+          {(
+            [
+              {
+                title: "Layout",
+                value: outputStyleOptions.outputLayout,
+                choices: [
+                  ["beside", "Answer beside the question"],
+                  ["above", "Answer under the question"],
+                  ["inline", "One line (classic)"]
+                ],
+                apply: (next: string) =>
+                  updateBuilderOptions((options) => ({
+                    ...options,
+                    outputLayout: next as OutputLayout
+                  }))
+              },
+              {
+                title: "Spacing",
+                value: outputStyleOptions.outputDensity,
+                choices: [
+                  ["compact", "Compact"],
+                  ["standard", "A little more"],
+                  ["spacious", "Spacious"]
+                ],
+                apply: (next: string) =>
+                  updateBuilderOptions((options) => ({
+                    ...options,
+                    outputDensity: next as OutputDensity
+                  }))
+              },
+              {
+                title: "Unanswered questions",
+                value: outputStyleOptions.outputUnanswered,
+                choices: [
+                  ["dash", "Show a dash"],
+                  ["hide", "Leave out"]
+                ],
+                apply: (next: string) =>
+                  updateBuilderOptions((options) => ({
+                    ...options,
+                    outputUnanswered: next === "hide" ? "hide" : "dash"
+                  }))
+              },
+              {
+                title: "Group titles",
+                value: outputStyleOptions.outputGroupTitles ? "show" : "hide",
+                choices: [
+                  ["show", "Print as headings"],
+                  ["hide", "Do not print"]
+                ],
+                apply: (next: string) =>
+                  updateBuilderOptions((options) => ({
+                    ...options,
+                    outputGroupTitles: next === "show"
+                  }))
+              }
+            ] as Array<{
+              title: string;
+              value: string;
+              choices: string[][];
+              apply: (next: string) => void;
+            }>
+          ).map((group) => (
+            <div className="rjsf-builder__output-style-row" key={group.title}>
+              <span className="rjsf-builder__output-style-title">
+                {group.title}
+              </span>
+              <div
+                className="rjsf-builder__output-style-choices"
+                role="group"
+                aria-label={group.title}
+              >
+                {group.choices.map(([choiceValue, choiceLabel]) => (
+                  <button
+                    key={choiceValue}
+                    type="button"
+                    aria-pressed={group.value === choiceValue}
+                    className={`rjsf-builder__button rjsf-builder__button--small rjsf-builder__output-style-choice${
+                      group.value === choiceValue ? " is-active" : ""
+                    }`}
+                    onClick={() => group.apply(choiceValue)}
+                  >
+                    {choiceLabel}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>{" "}
+        {SHOW_PDF_HEADER_FOOTER_CONTROLS ? (
+        <Fragment>
         <div className="rjsf-builder__block">
           {" "}
           <div className="rjsf-builder__subtitle">
@@ -12581,74 +13314,30 @@ export default function FormStudioBuilder(
             <span>Hide form title and description</span>{" "}
           </label>{" "}
         </div>{" "}
+        </Fragment>
+        ) : null}{" "}
       </div>{" "}
       <div className="rjsf-builder__document-output-preview">
         {" "}
         <div className="rjsf-builder__token-preview">
-          {" "}
           <div className="rjsf-builder__token-preview-title">
-            {" "}
-            Final PDF HTML preview{" "}
-          </div>{" "}
+            Document preview
+          </div>
           <div className="rjsf-builder__help">
-            {" "}
-            Uses the current form data, document output templates, PDF
-            header/footer templates, section visibility, system section HTML
-            snippets, and runtime tokens. This is the same print-ready HTML
-            written to <code>resolvedPdfHtmlAttr</code>.{" "}
-          </div>{" "}
-          {finalDocumentOutputHtml ? (
-            <div className="rjsf-builder__token-preview-body">
-              {" "}
-              <div className="rjsf-builder__token-preview-tabs">
-                {" "}
-                <button
-                  type="button"
-                  className={`rjsf-builder__button rjsf-builder__button--small rjsf-builder__token-preview-tab${
-                    documentPreviewMode === "rendered" ? " is-active" : ""
-                  }`}
-                  onClick={() => setDocumentPreviewMode("rendered")}
-                >
-                  {" "}
-                  Rendered{" "}
-                </button>{" "}
-                <button
-                  type="button"
-                  className={`rjsf-builder__button rjsf-builder__button--small rjsf-builder__token-preview-tab${
-                    documentPreviewMode === "html" ? " is-active" : ""
-                  }`}
-                  onClick={() => setDocumentPreviewMode("html")}
-                >
-                  {" "}
-                  HTML{" "}
-                </button>{" "}
-              </div>{" "}
-              {documentPreviewMode === "rendered" ? (
-                <iframe
-                  title="Final PDF document preview"
-                  className="rjsf-builder__token-preview-frame"
-                  srcDoc={finalDocumentOutputHtml}
-                />
-              ) : (
-                <label className="rjsf-builder__field">
-                  {" "}
-                  <span>Print-ready HTML document</span>{" "}
-                  <textarea
-                    className="rjsf-builder__input rjsf-builder__input--multiline rjsf-builder__token-preview-output"
-                    value={finalDocumentOutputHtml}
-                    readOnly
-                  />{" "}
-                </label>
-              )}{" "}
-            </div>
+            What Preview mode and the PDF show, with the Document style applied
+            and the answers currently in the Preview tab.
+          </div>
+          {hasMeaningfulHtml(documentPreviewBodyHtml) ? (
+            <div
+              className="rjsf-builder__document-preview-body rjsf-builder__output-style-preview"
+              dangerouslySetInnerHTML={htmlProp(documentPreviewBodyHtml)}
+            />
           ) : (
             <div className="rjsf-builder__help">
-              {" "}
-              No printable document output yet. Add document output templates,
-              PDF header/footer templates, system section HTML, or fill values
-              to preview the assembled PDF document HTML.{" "}
+              Nothing to print yet. Add fields, or fill in the Preview tab to
+              see answers here.
             </div>
-          )}{" "}
+          )}
         </div>{" "}
       </div>{" "}
     </div>
@@ -13072,7 +13761,7 @@ export default function FormStudioBuilder(
           return;
         }
       }
-      setChoiceOptionsDraft(normalized.rows);
+      setChoiceOptionsDraft((prev) => keepDraftRowIds(prev, normalized.rows));
       updateDefinition((current) => ({
         ...current,
         components: current.components.map((component) => {
@@ -13117,12 +13806,15 @@ export default function FormStudioBuilder(
       const nextRows = normalized.length
         ? normalized
         : createDefaultMatrixRows("matrix");
-      setMatrixRowsDraft(
-        nextRows.map((row) => ({
-          id: makeId("mrow"),
-          key: row.key,
-          label: row.label
-        }))
+      setMatrixRowsDraft((prev) =>
+        keepDraftRowIds(
+          prev,
+          nextRows.map((row) => ({
+            id: makeId("mrow"),
+            key: row.key,
+            label: row.label
+          }))
+        )
       );
       updateDefinition((current) => ({
         ...current,
@@ -13174,6 +13866,14 @@ export default function FormStudioBuilder(
         return map;
       }, {} as Record<string, { id?: string; orderIndex?: number; section?: string; sectionId?: string; sectionOrder?: number; sectionColumns?: number; sectionColumn?: number; sectionCollapsible?: boolean; sectionCollapsedByDefault?: boolean; columnSpan?: number; hasVisibilityRules?: boolean; sharedFieldRef?: string }>),
     [definition.components]
+  );
+  const viewerLiveValues = useMemo<FsLiveValues>(
+    () => ({
+      contentBlockTokens: contentBlockTokenValues,
+      sectionStatsByKey,
+      activeSectionKey: activeViewerSectionKey || undefined
+    }),
+    [contentBlockTokenValues, sectionStatsByKey, activeViewerSectionKey]
   );
   const componentIdByKey = useMemo(
     () =>
@@ -15550,10 +16250,11 @@ export default function FormStudioBuilder(
                 FormStudio editor page renders its own jump button in the
                 Sections panel, so this one was a duplicate (Bill request). */}
             {" "}
+            <FsLiveContext.Provider value={viewerLiveValues}>
             <Form
               schema={schema as any}
               uiSchema={uiSchema as any}
-              formData={viewerFormData}
+              formData={rjsfViewerFormData}
               validator={validator}
               idPrefix={instanceIdPrefix}
               experimental_defaultFormStateBehavior={{
@@ -15578,7 +16279,6 @@ export default function FormStudioBuilder(
                 onSectionVisibilityChange,
                 systemTemplateSlotRenderers,
                 systemSectionHtmlBySlot,
-                contentBlockTokens: contentBlockTokenValues,
                 selectedPreviewKey: undefined,
                 // Scroll requests also come from the page rail (rail bus), which
                 // runs with the widget's own section panel hidden.
@@ -15586,9 +16286,7 @@ export default function FormStudioBuilder(
                   ? previewScrollToSectionKey
                   : undefined,
                 previewScrollRequest: isViewer ? previewScrollRequest : 0,
-                sectionStatsByKey,
                 wizard: wizardContext,
-                activeSectionKey: activeViewerSectionKey || undefined,
                 // Always on in viewer: the page-level rail reads the active
                 // group from the data-active stamp even when the widget's
                 // own panel is hidden.
@@ -15609,7 +16307,8 @@ export default function FormStudioBuilder(
                 scoreTotal: ScoreTotalWidget,
                 numberStepper: NumberStepperWidget,
                 numberScale: NumberScaleWidget,
-                multiSelectDropdown: MultiSelectDropdownWidget
+                multiSelectDropdown: MultiSelectDropdownWidget,
+                TextareaWidget: StableTextareaWidget
               }}
               fields={FORM_FIELDS}
               templates={FORM_TEMPLATES}
@@ -15620,7 +16319,7 @@ export default function FormStudioBuilder(
               onChange={(event: any) => {
                 const nextData = (event?.formData || {}) as JsonObject;
                 if (
-                  JSON.stringify(nextData) === JSON.stringify(viewerFormData)
+                  JSON.stringify(nextData) === JSON.stringify(rjsfViewerFormData)
                 ) {
                   return;
                 }
@@ -15634,7 +16333,8 @@ export default function FormStudioBuilder(
                 tabIndex={-1}
                 aria-hidden="true"
               />{" "}
-            </Form>{" "}
+            </Form>
+            </FsLiveContext.Provider>{" "}
             {viewerSnippets.length ? (
               <SnippetsLayer
                 snippets={viewerSnippets}
@@ -15737,7 +16437,7 @@ export default function FormStudioBuilder(
           <Form
             schema={schema as any}
             uiSchema={uiSchema as any}
-            formData={formData}
+            formData={rjsfFormData}
             validator={validator}
             idPrefix={instanceIdPrefix}
             experimental_defaultFormStateBehavior={{
@@ -15782,7 +16482,8 @@ export default function FormStudioBuilder(
                 scoreTotal: ScoreTotalWidget,
               numberStepper: NumberStepperWidget,
               numberScale: NumberScaleWidget,
-                multiSelectDropdown: MultiSelectDropdownWidget
+                multiSelectDropdown: MultiSelectDropdownWidget,
+                TextareaWidget: StableTextareaWidget
             }}
             fields={FORM_FIELDS}
             templates={FORM_TEMPLATES}
@@ -16188,7 +16889,7 @@ export default function FormStudioBuilder(
                 <Form
                   schema={designerPreviewSchema as any}
                   uiSchema={uiSchema as any}
-                  formData={formData}
+                  formData={rjsfFormData}
                   validator={validator}
                   idPrefix={instanceIdPrefix}
                   experimental_defaultFormStateBehavior={{
@@ -16245,7 +16946,8 @@ export default function FormStudioBuilder(
                 scoreTotal: ScoreTotalWidget,
                     numberStepper: NumberStepperWidget,
                     numberScale: NumberScaleWidget,
-                multiSelectDropdown: MultiSelectDropdownWidget
+                multiSelectDropdown: MultiSelectDropdownWidget,
+                TextareaWidget: StableTextareaWidget
                   }}
                   fields={FORM_FIELDS}
                   templates={FORM_TEMPLATES}
@@ -17838,12 +18540,50 @@ export default function FormStudioBuilder(
                             </label>{" "}
                             {selectedComponent.blockStyle === "divider" ||
                             selectedComponent.blockStyle === "spacer" ? (
-                              <div className="rjsf-builder__help">
-                                {" "}
-                                {selectedComponent.blockStyle === "divider"
-                                  ? "Draws a horizontal rule in the form. No text, no document output."
-                                  : "Adds vertical breathing room in the form. No text, no document output."}{" "}
-                              </div>
+                              selectedComponent.blockStyle === "divider" ? (
+                                <div className="rjsf-builder__help">
+                                  Draws a horizontal rule in the form. No text,
+                                  no document output.
+                                </div>
+                              ) : (
+                                <Fragment>
+                                  <div className="rjsf-builder__help">
+                                    Adds vertical space in the form, and the
+                                    same in the preview and PDF.
+                                  </div>
+                                  <label className="rjsf-builder__field">
+                                    <span>Space in the document</span>
+                                    <select
+                                      className="rjsf-builder__select"
+                                      value={
+                                        selectedComponent.outputSpaceBefore ||
+                                        "small"
+                                      }
+                                      onChange={(event) => {
+                                        const nextSpace = resolveOutputSpace(
+                                          event.target.value
+                                        );
+                                        updateDefinition((current) => ({
+                                          ...current,
+                                          components: current.components.map(
+                                            (component) =>
+                                              component.id ===
+                                              selectedComponent.id
+                                                ? {
+                                                    ...component,
+                                                    outputSpaceBefore: nextSpace
+                                                  }
+                                                : component
+                                          )
+                                        }));
+                                      }}
+                                    >
+                                      <option value="small">A little</option>
+                                      <option value="large">More</option>
+                                    </select>
+                                  </label>
+                                </Fragment>
+                              )
                             ) : (
                             <div className="rjsf-builder__field">
                               {" "}
@@ -17999,9 +18739,108 @@ export default function FormStudioBuilder(
                         <div className="rjsf-builder__block">
                           {" "}
                           <div className="rjsf-builder__subtitle">
-                            {" "}
-                            Document output template{" "}
-                          </div>{" "}
+                            How this prints
+                          </div>
+                          {selectedComponent.type !== "contentBlock" &&
+                          selectedComponent.type !== "datagrid" ? (
+                            <div
+                              className="rjsf-builder__output-style-choices rjsf-builder__print-mode"
+                              role="group"
+                              aria-label="How this prints"
+                            >
+                              {(
+                                [
+                                  ["standard", "Question and answer"],
+                                  ["under", "Answer under the question"],
+                                  ["custom", "My own wording"]
+                                ] as Array<["standard" | "under" | "custom", string]>
+                              )
+                                .filter(
+                                  ([mode]) =>
+                                    mode !== "under" ||
+                                    selectedComponent.type !== "matrix"
+                                )
+                                .map(([mode, label]) => {
+                                const activeMode = showCustomWording
+                                  ? "custom"
+                                  : selectedComponentOutputMode;
+                                return (
+                                  <button
+                                    key={mode}
+                                    type="button"
+                                    aria-pressed={activeMode === mode}
+                                    className={`rjsf-builder__button rjsf-builder__button--small rjsf-builder__output-style-choice${
+                                      activeMode === mode ? " is-active" : ""
+                                    }`}
+                                    onClick={() => {
+                                      setCustomWordingOpenId(
+                                        mode === "custom"
+                                          ? selectedComponent.id
+                                          : null
+                                      );
+                                      if (mode === "custom") {
+                                        return;
+                                      }
+                                      // A field property, not a template: a
+                                      // total keeps its score text and the
+                                      // label still follows the field.
+                                      const nextPlacement =
+                                        mode === "under"
+                                          ? ("under" as const)
+                                          : undefined;
+                                      updateDefinition((current) => ({
+                                        ...current,
+                                        components: current.components.map(
+                                          (component) =>
+                                            component.id ===
+                                            selectedComponent.id
+                                              ? {
+                                                  ...component,
+                                                  documentOutputTemplate:
+                                                    undefined,
+                                                  outputPlacement:
+                                                    nextPlacement
+                                                }
+                                              : component
+                                        )
+                                      }));
+                                    }}
+                                  >
+                                    {label}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ) : null}
+                          <div className="rjsf-builder__print-example">
+                            <div className="rjsf-builder__print-example-title">
+                              Prints as
+                              {selectedComponentPrintExample.usesSample
+                                ? " (with a sample answer)"
+                                : ""}
+                            </div>
+                            {hasMeaningfulHtml(
+                              selectedComponentPrintExample.html
+                            ) ? (
+                              <div
+                                className="rjsf-builder__document-preview-body"
+                                dangerouslySetInnerHTML={htmlProp(
+                                  selectedComponentPrintExample.html
+                                )}
+                              />
+                            ) : (
+                              <div className="rjsf-builder__help">
+                                Nothing prints for this item right now.
+                              </div>
+                            )}
+                          </div>
+                          {showCustomWording ? (
+                          <Fragment>
+                          <div className="rjsf-builder__help">
+                            Write the sentence the way it should read. Click a
+                            token to drop in an answer or a client detail; the
+                            example above updates as you type.
+                          </div>
                           <div className="rjsf-builder__token-picker-toolbar">
                             {" "}
                             <label className="rjsf-builder__field">
@@ -18141,6 +18980,36 @@ export default function FormStudioBuilder(
                               }
                             />{" "}
                           </div>{" "}
+                          </Fragment>
+                          ) : null}
+                          <label className="rjsf-builder__field">
+                            <span>Space above in the document</span>
+                            <select
+                              className="rjsf-builder__select"
+                              value={selectedComponent.outputSpaceBefore || ""}
+                              onChange={(event) => {
+                                const nextSpace = resolveOutputSpace(
+                                  event.target.value
+                                );
+                                updateDefinition((current) => ({
+                                  ...current,
+                                  components: current.components.map(
+                                    (component) =>
+                                      component.id === selectedComponent.id
+                                        ? {
+                                            ...component,
+                                            outputSpaceBefore: nextSpace
+                                          }
+                                        : component
+                                  )
+                                }));
+                              }}
+                            >
+                              <option value="">None</option>
+                              <option value="small">A little</option>
+                              <option value="large">More</option>
+                            </select>
+                          </label>
                           <label className="rjsf-builder__toggle">
                             {" "}
                             <input
@@ -18486,92 +19355,6 @@ export default function FormStudioBuilder(
                               </ul>{" "}
                             </div>
                           ) : null}{" "}
-                        </div>{" "}
-                        <div className="rjsf-builder__token-preview">
-                          {" "}
-                          <div className="rjsf-builder__token-preview-title">
-                            {" "}
-                            Token preview{" "}
-                          </div>{" "}
-                          {selectedComponentTokenPreview.outputHtml ? (
-                            <div className="rjsf-builder__token-preview-body">
-                              {" "}
-                              <div className="rjsf-builder__token-preview-tabs">
-                                {" "}
-                                <button
-                                  type="button"
-                                  className={`rjsf-builder__button rjsf-builder__button--small rjsf-builder__token-preview-tab${
-                                    tokenPreviewMode === "rendered"
-                                      ? " is-active"
-                                      : ""
-                                  }`}
-                                  onClick={() =>
-                                    setTokenPreviewMode("rendered")
-                                  }
-                                >
-                                  {" "}
-                                  Rendered{" "}
-                                </button>{" "}
-                                <button
-                                  type="button"
-                                  className={`rjsf-builder__button rjsf-builder__button--small rjsf-builder__token-preview-tab${
-                                    tokenPreviewMode === "html"
-                                      ? " is-active"
-                                      : ""
-                                  }`}
-                                  onClick={() => setTokenPreviewMode("html")}
-                                >
-                                  {" "}
-                                  HTML{" "}
-                                </button>{" "}
-                              </div>{" "}
-                              {tokenPreviewMode === "rendered" ? (
-                                <div
-                                  className="rjsf-builder__token-preview-rendered"
-                                  dangerouslySetInnerHTML={{
-                                    __html:
-                                      selectedComponentTokenPreview.outputHtml
-                                  }}
-                                />
-                              ) : (
-                                <label className="rjsf-builder__field">
-                                  {" "}
-                                  <span>Resolved output (HTML)</span>{" "}
-                                  <textarea
-                                    className="rjsf-builder__input rjsf-builder__input--multiline rjsf-builder__token-preview-output"
-                                    value={
-                                      selectedComponentTokenPreview.outputHtml
-                                    }
-                                    readOnly
-                                  />{" "}
-                                </label>
-                              )}{" "}
-                              {selectedComponentTokenPreview.tokenRows
-                                .length ? (
-                                <div className="rjsf-builder__token-preview-tokens">
-                                  {" "}
-                                  {selectedComponentTokenPreview.tokenRows.map(
-                                    (item) => (
-                                      <div
-                                        className="rjsf-builder__token-preview-token"
-                                        key={item.key}
-                                      >
-                                        {" "}
-                                        <code>{item.key}</code>{" "}
-                                        <span>{item.value || "(empty)"}</span>{" "}
-                                      </div>
-                                    )
-                                  )}{" "}
-                                </div>
-                              ) : null}{" "}
-                            </div>
-                          ) : (
-                            <div className="rjsf-builder__help">
-                              {" "}
-                              Add a document output template to preview resolved
-                              tokens.{" "}
-                            </div>
-                          )}{" "}
                         </div>{" "}
                       </Fragment>
                     ) : null}{" "}
