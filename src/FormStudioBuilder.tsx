@@ -2729,17 +2729,31 @@ function outputValueHtml(
     .trim()
     .replace(/\r?\n/g, "<br />");
 }
+/** A label longer than this (plain text) no longer fits the label column, so
+ *  the row prints label-above like a long answer does. Matrix rows are exempt
+ *  (their labels are short row captions in a fixed grid). */
+const OUTPUT_LONG_LABEL_CHARS = 45;
 function renderOutputRow(
   labelHtml: string,
   valueHtml: string,
-  options: { stacked?: boolean; placement?: "under" | "beside" } = {}
+  options: {
+    stacked?: boolean;
+    placement?: "under" | "beside";
+    /** Matrix rows: never stack on label length. */
+    matrixRow?: boolean;
+  } = {}
 ): string {
   const plainLength = valueHtml.replace(/<[^>]+>/g, "").length;
+  const labelLength = plainTextFromHtml(labelHtml).length;
+  // An unanswered row has nothing to stack: the dash prints beside the label
+  // like its neighbours, whatever the template or label length says.
   const long =
-    options.stacked ||
-    options.placement === "under" ||
-    plainLength > 140 ||
-    /<br\s*\/?>/i.test(valueHtml);
+    !!valueHtml &&
+    (options.stacked ||
+      options.placement === "under" ||
+      plainLength > 140 ||
+      /<br\s*\/?>/i.test(valueHtml) ||
+      (!options.matrixRow && labelLength > OUTPUT_LONG_LABEL_CHARS));
   // Placement override classes, so the override also works in layouts whose
   // default is the other placement (and in "One line (classic)").
   const placementClass =
@@ -2858,7 +2872,8 @@ function renderStructuredFieldOutput(
           escapeHtml(
             resolveTokenValue(`${component.key}_${row.key}_label`, tokenValues)
           ),
-          rowValues[index]
+          rowValues[index],
+          { matrixRow: true }
         )
       )
       .join("");
