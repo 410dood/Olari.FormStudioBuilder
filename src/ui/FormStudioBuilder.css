@@ -1962,7 +1962,7 @@ input.rjsf-builder__num-stepper-input::-webkit-inner-spin-button {
   display: grid;
   /* --rb-label-col is set on the widget root when the form's "Label width"
      builder option is chosen (n/12 as a percentage); default caps at 220px. */
-  grid-template-columns: minmax(140px, var(--rb-label-col, 220px)) minmax(0, 1fr);
+  grid-template-columns: minmax(140px, var(--rb-label-col, 220px)) minmax(var(--rb-inline-input-min, 200px), 1fr);
   column-gap: 10px;
   row-gap: 6px;
   align-items: start;
@@ -1988,14 +1988,14 @@ input.rjsf-builder__num-stepper-input::-webkit-inner-spin-button {
 }
 
 .rjsf-builder__object--labels-inline .form-group.rjsf-field.rjsf-builder__field-label-hidden:not(.rjsf-field-boolean):not(.rjsf-field-object):not(.rjsf-builder__field--content-block):not(.rjsf-field-array:not(.rjsf-builder__field--choice-multi)) > :not(label):not(.control-label) {
-  grid-column: 1;
+  grid-column: 1 / -1;
 }
 
 .rjsf-builder__object:not(.rjsf-builder__object--labels-inline) .form-group.rjsf-field.rjsf-builder__field-label-inline:not(.rjsf-field-boolean):not(.rjsf-field-object):not(.rjsf-builder__field--content-block):not(.rjsf-field-array:not(.rjsf-builder__field--choice-multi)) {
   display: grid;
   /* --rb-label-col is set on the widget root when the form's "Label width"
      builder option is chosen (n/12 as a percentage); default caps at 220px. */
-  grid-template-columns: minmax(140px, var(--rb-label-col, 220px)) minmax(0, 1fr);
+  grid-template-columns: minmax(140px, var(--rb-label-col, 220px)) minmax(var(--rb-inline-input-min, 200px), 1fr);
   column-gap: 10px;
   row-gap: 6px;
   align-items: start;
@@ -3772,22 +3772,6 @@ input.rjsf-builder__num-stepper-input::-webkit-inner-spin-button {
   .rjsf-builder__col {
     grid-column: auto !important;
   }
-
-  .rjsf-builder__object--labels-inline .form-group.rjsf-field:not(.rjsf-field-boolean):not(.rjsf-field-object):not(.rjsf-builder__field--content-block):not(.rjsf-field-array:not(.rjsf-builder__field--choice-multi)) {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .rjsf-builder__object--labels-inline .form-group.rjsf-field:not(.rjsf-field-boolean):not(.rjsf-field-object):not(.rjsf-builder__field--content-block):not(.rjsf-field-array:not(.rjsf-builder__field--choice-multi)) > :not(label):not(.control-label) {
-    grid-column: 1;
-  }
-
-  .rjsf-builder__object:not(.rjsf-builder__object--labels-inline) .form-group.rjsf-field.rjsf-builder__field-label-inline:not(.rjsf-field-boolean):not(.rjsf-field-object):not(.rjsf-builder__field--content-block):not(.rjsf-field-array:not(.rjsf-builder__field--choice-multi)) {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .rjsf-builder__object:not(.rjsf-builder__object--labels-inline) .form-group.rjsf-field.rjsf-builder__field-label-inline:not(.rjsf-field-boolean):not(.rjsf-field-object):not(.rjsf-builder__field--content-block):not(.rjsf-field-array:not(.rjsf-builder__field--choice-multi)) > :not(label):not(.control-label) {
-    grid-column: 1;
-  }
 }
 
 .rjsf-builder__document-preview {
@@ -4107,17 +4091,6 @@ input.rjsf-builder__num-stepper-input::-webkit-inner-spin-button {
     grid-column: auto !important;
   }
 
-  /* Inline labels fall back to stacked when there is no room */
-  .rjsf-builder__object--labels-inline .form-group.rjsf-field:not(.rjsf-field-boolean):not(.rjsf-field-object):not(.rjsf-builder__field--content-block):not(.rjsf-field-array:not(.rjsf-builder__field--choice-multi)),
-  .rjsf-builder__object:not(.rjsf-builder__object--labels-inline) .form-group.rjsf-field.rjsf-builder__field-label-inline:not(.rjsf-field-boolean):not(.rjsf-field-object):not(.rjsf-builder__field--content-block):not(.rjsf-field-array:not(.rjsf-builder__field--choice-multi)) {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .rjsf-builder__object--labels-inline .form-group.rjsf-field:not(.rjsf-field-boolean):not(.rjsf-field-object):not(.rjsf-builder__field--content-block):not(.rjsf-field-array:not(.rjsf-builder__field--choice-multi)) > :not(label):not(.control-label),
-  .rjsf-builder__object:not(.rjsf-builder__object--labels-inline) .form-group.rjsf-field.rjsf-builder__field-label-inline:not(.rjsf-field-boolean):not(.rjsf-field-object):not(.rjsf-builder__field--content-block):not(.rjsf-field-array:not(.rjsf-builder__field--choice-multi)) > :not(label):not(.control-label) {
-    grid-column: 1;
-  }
-
   /* Modern segmented pills stretch full-width when stacked tight */
   .form-group.rjsf-builder__field--opt-modern .field-radio-group > .radio {
     flex: 1 1 auto;
@@ -4132,6 +4105,31 @@ input.rjsf-builder__num-stepper-input::-webkit-inner-spin-button {
   /* Very narrow (phone / split view): tighten paddings */
   .rjsf-builder__section {
     padding: 8px;
+  }
+}
+
+/* Inline labels decide per FIELD, not per pane (v0.8.2).
+   Each field cell of an inline-label form (or a field with its own inline
+   override) is a size container, and the label sits beside the input only
+   while that cell can hold the label track minimum (140px), the gap (10px)
+   and the minimum input width (--rb-inline-input-min, 200px): 350px.
+   Narrower cells stack label over input. Block-label forms never get the
+   container, so their layout is untouched. Container queries cannot read
+   custom properties: if --rb-inline-input-min changes, change 350px too. */
+.rjsf-builder__object--labels-inline .rjsf-builder__col,
+.rjsf-builder__col:has(> .rjsf-builder__field-label-inline) {
+  container: fs-field / inline-size;
+}
+
+@container fs-field (max-width: 349.98px) {
+  .rjsf-builder__object--labels-inline .form-group.rjsf-field:not(.rjsf-field-boolean):not(.rjsf-field-object):not(.rjsf-builder__field--content-block):not(.rjsf-field-array:not(.rjsf-builder__field--choice-multi)),
+  .rjsf-builder__object:not(.rjsf-builder__object--labels-inline) .form-group.rjsf-field.rjsf-builder__field-label-inline:not(.rjsf-field-boolean):not(.rjsf-field-object):not(.rjsf-builder__field--content-block):not(.rjsf-field-array:not(.rjsf-builder__field--choice-multi)) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .rjsf-builder__object--labels-inline .form-group.rjsf-field:not(.rjsf-field-boolean):not(.rjsf-field-object):not(.rjsf-builder__field--content-block):not(.rjsf-field-array:not(.rjsf-builder__field--choice-multi)) > :not(label):not(.control-label),
+  .rjsf-builder__object:not(.rjsf-builder__object--labels-inline) .form-group.rjsf-field.rjsf-builder__field-label-inline:not(.rjsf-field-boolean):not(.rjsf-field-object):not(.rjsf-builder__field--content-block):not(.rjsf-field-array:not(.rjsf-builder__field--choice-multi)) > :not(label):not(.control-label) {
+    grid-column: 1;
   }
 }
 

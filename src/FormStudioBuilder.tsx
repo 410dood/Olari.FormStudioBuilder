@@ -1,5 +1,7 @@
 import {
+  Component,
   createContext,
+  type ErrorInfo,
   useContext,
   type CSSProperties,
   type DragEvent,
@@ -210,6 +212,7 @@ export interface FormStudioBuilderProps {
   exportPdfButtonText?: string;
   viewerHeaderWidget?: ReactNode;
   designerHeaderWidget?: ReactNode;
+  onErrorAction?: ActionValue<{ report: string | undefined }>;
   viewerThemePreset?: ThemePreset;
   activeMedicationsDatagrid2?: ReactNode;
   activeAllergiesDatagrid2?: ReactNode;
@@ -906,7 +909,8 @@ function parseSystemTemplatesConfigJson(raw?: string): {
       });
     });
     return { templates, fingerprint: value };
-  } catch {
+  } catch (error) {
+    fsReportError("reading system templates config", error);
     return { templates: [], fingerprint: value };
   }
 }
@@ -1459,7 +1463,8 @@ function parseTokenContextJson(raw?: string): Record<string, string> {
       }
     );
     return tokens;
-  } catch (_error) {
+  } catch (error) {
+    fsReportError("reading token context", error);
     return {};
   }
 }
@@ -1472,7 +1477,8 @@ interface SnippetItem {
 function decodeSnippetPart(value: string): string {
   try {
     return decodeURIComponent(value);
-  } catch (_error) {
+  } catch (error) {
+    fsReportError("decoding snippet text", error);
     return value;
   }
 }
@@ -1511,7 +1517,8 @@ function parseSnippetsJson(raw?: string): SnippetItem[] {
       snippets.push({ id, name, text, scope });
     });
     return snippets;
-  } catch (_error) {
+  } catch (error) {
+    fsReportError("reading snippets", error);
     return [];
   }
 }
@@ -1622,7 +1629,8 @@ function parseTokenCatalog(raw?: string): CatalogToken[] {
       });
     });
     return tokens.sort((a, b) => a.label.localeCompare(b.label));
-  } catch (_error) {
+  } catch (error) {
+    fsReportError("reading token catalog", error);
     return [];
   }
 }
@@ -1714,7 +1722,8 @@ function buildTokenCatalogFromDatasource(
       try {
         const parsed = JSON.parse(optionsRaw);
         options = Array.isArray(parsed) ? parsed : [];
-      } catch (_error) {
+      } catch (error) {
+        fsReportError("reading token catalog options", error, { fieldKey: key });
         options = [];
       }
     }
@@ -1828,7 +1837,8 @@ function renderSystemSectionDataToHtml(raw?: string): Record<string, string> {
       next[normalizedKey.toLowerCase()] = html;
     });
     return next;
-  } catch (_error) {
+  } catch (error) {
+    fsReportError("building system section output", error);
     return {};
   }
 }
@@ -2216,10 +2226,17 @@ function getComponentTokenValue(
       .filter((value) => clean(value));
     return values.join(", ");
   }
+  // Choice fields print their option LABEL ("Alpha"), not the stored value
+  // ("a"); multi-select joins labels the way values were joined before. The
+  // stored value stays reachable as {key_value} (see buildFormTokenValues).
+  // Scoring and per-answer wording (optionOutputTexts) read the stored value
+  // straight from data, so they are not affected by this.
   if (
     component.type === "yesno" ||
     component.type === "checkbox" ||
-    component.type === "date"
+    component.type === "date" ||
+    component.type === "select" ||
+    component.type === "radio"
   ) {
     return formatValueForPrint(
       data[component.key],
@@ -2316,13 +2333,12 @@ function getEffectiveDocumentOutputTemplate(component: FormComponent): string {
     ? str(component.documentOutputTemplate)
     : getDefaultDocumentOutputTemplate(component);
 }
+// Fields whose stored value is an option key with a separate display label.
+function isChoiceFieldType(type: FieldType): boolean {
+  return type === "radio" || type === "select" || type === "yesno";
+}
 function supportsPerAnswerOutput(component: FormComponent): boolean {
-  return (
-    (component.type === "radio" ||
-      component.type === "select" ||
-      component.type === "yesno") &&
-    !component.multiSelect
-  );
+  return isChoiceFieldType(component.type) && !component.multiSelect;
 }
 /**
  * Per-answer document output. Returns the narrative template mapped to the
@@ -2406,6 +2422,14 @@ function buildFormTokenValues(
       `${component.key}_label`,
       stripTrailingColon(component.label || component.key)
     );
+    if (isChoiceFieldType(component.type)) {
+      // The raw stored value ("a", "yes"), for a sentence that needs it.
+      addToken(
+        tokens,
+        `${component.key}_value`,
+        stringifyTokenValue(data[component.key])
+      );
+    }
     if (component.type === "total") {
       const numericTotal = toNumericValue(data[component.key]) ?? 0;
       const bandLabel = component.scoreBands?.length
@@ -4277,7 +4301,8 @@ function getDragData(dataTransfer: DataTransfer, type: string): string {
   }
   try {
     return decodeURIComponent(fallback.slice(prefix.length));
-  } catch (_error) {
+  } catch (error) {
+    fsReportError("reading drag payload", error);
     return fallback.slice(prefix.length);
   }
 }
@@ -6276,7 +6301,9 @@ function parseDefinition(raw?: string): {
     return { value: DEFAULT_FORM };
   }
   try {
-    const parsed = JSON.parse(raw as string);
+    const parsed = JSON.parse(
+      FSB_TEST_FAULT === "parse" ? `${raw as string}{` : (raw as string)
+    );
     const list = Array.isArray(parsed?.components)
       ? parsed.components
       : Array.isArray(parsed?.fields)
@@ -6434,6 +6461,7 @@ function parseDefinition(raw?: string): {
       }
     };
   } catch (error) {
+    fsReportError("parsing template definition", error);
     return {
       value: DEFAULT_FORM,
       error:
@@ -6454,6 +6482,7 @@ function parseFormData(raw?: string): { value: JsonObject; error?: string } {
     }
     return { value: parsed as JsonObject };
   } catch (error) {
+    fsReportError("parsing saved answers", error);
     return {
       value: {},
       error:
@@ -7740,6 +7769,181 @@ function runAction(action?: ActionValue): void {
     return;
   }
   action.execute();
+}
+// ---------------------------------------------------------------------------
+// Error reporting. Every catch block calls fsReportError(attempt, error) and
+// then carries on with its fallback. Reports go to the widget's onErrorAction
+// (a microflow that writes them to the FormStudio.Client log node). Nothing
+// here runs unless an error was caught, so hot paths pay nothing.
+// A report never carries answer values, client names or other content: only
+// what was attempted, a sanitized message, trimmed stack frames and metadata.
+// ---------------------------------------------------------------------------
+const FSB_WIDGET_VERSION = "0.8.4";
+const FS_REPORT_CAP_PER_MINUTE = 5;
+const FS_REPORT_STACK_FRAMES = 4;
+interface FsErrorSink {
+  viewMode: () => string;
+  template: () => string;
+  deliver: (report: string) => boolean;
+}
+let fsCurrentSink: FsErrorSink | null = null;
+// Each widget instance provides its own sink so module-level reports are
+// credited to the instance doing the work (render runs depth-first per
+// instance; effects re-assert the sink before each instance's effects run).
+const FsSinkContext = createContext<FsErrorSink | null>(null);
+const fsReportedKeys = new Set<string>();
+const fsReportTimes: number[] = [];
+let fsSuppressedCount = 0;
+let fsReporting = false;
+// Test-only fault injection, read once at load. Inert unless a test sets
+// sessionStorage "fsb-test-fault" before the page loads.
+const FSB_TEST_FAULT: string = (() => {
+  try {
+    return window.sessionStorage.getItem("fsb-test-fault") || "";
+  } catch {
+    return "";
+  }
+})();
+// Error messages can quote input (JSON.parse: `Unexpected token 'a', "abc" is
+// not valid JSON`). Drop every quoted run and any single quoted/unquoted token
+// character, collapse whitespace and cap the length.
+function fsSanitizeText(raw: unknown, max = 200): string {
+  return String(raw ?? "")
+    .replace(/"[^"]*"?|'[^']*'?|`[^`]*`?|“[^”]*”?/g, "…")
+    .replace(/(token)\s+\S+/gi, "$1 ?")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, max);
+}
+// Keep only frame lines ("at fn (url:line:col)" / "fn@url:line:col"), never
+// the message line, and strip query strings from URLs.
+function fsTrimStack(stack: unknown): string[] {
+  return String(stack ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^at\s|@/.test(line))
+    .slice(0, FS_REPORT_STACK_FRAMES)
+    .map((line) => fsSanitizeText(line.replace(/\?[^:)\s]*/g, ""), 160));
+}
+function fsReportError(
+  attempt: string,
+  error: unknown,
+  detail?: { fieldKey?: string }
+): void {
+  if (fsReporting) {
+    return;
+  }
+  fsReporting = true;
+  try {
+    const sink = fsCurrentSink;
+    const err = error as { name?: unknown; message?: unknown; stack?: unknown };
+    const message = fsSanitizeText(
+      err && typeof err === "object" ? err.message : error
+    );
+    const stack = err && typeof err === "object" ? fsTrimStack(err.stack) : [];
+    const template = sink ? fsSanitizeText(sink.template(), 80) : "";
+    const dedupeKey = `${attempt}|${message}|${stack[0] || ""}|${template}`;
+    if (fsReportedKeys.has(dedupeKey)) {
+      return;
+    }
+    fsReportedKeys.add(dedupeKey);
+    const storageKey = `fsb-err-${dedupeKey}`;
+    try {
+      if (window.sessionStorage.getItem(storageKey) === "1") {
+        return;
+      }
+      window.sessionStorage.setItem(storageKey, "1");
+    } catch {
+      // no sessionStorage: the in-memory set still dedupes for this page load
+    }
+    const now = Date.now();
+    while (fsReportTimes.length && now - fsReportTimes[0] > 60000) {
+      fsReportTimes.shift();
+    }
+    if (fsReportTimes.length >= FS_REPORT_CAP_PER_MINUTE) {
+      fsSuppressedCount += 1;
+      return;
+    }
+    fsReportTimes.push(now);
+    const report: Record<string, unknown> = {
+      attempt: fsSanitizeText(attempt, 120),
+      message,
+      errorName: fsSanitizeText(err && typeof err === "object" ? err.name : "", 40),
+      stack,
+      widgetVersion: FSB_WIDGET_VERSION,
+      viewMode: sink ? sink.viewMode() : "",
+      template,
+      userAgent: fsSanitizeText(navigator.userAgent, 200),
+      time: new Date(now).toISOString()
+    };
+    if (detail?.fieldKey) {
+      report.fieldKey = fsSanitizeText(detail.fieldKey, 80);
+    }
+    if (fsSuppressedCount) {
+      report.suppressedSinceLast = fsSuppressedCount;
+      fsSuppressedCount = 0;
+    }
+    const json = JSON.stringify(report);
+    console.error(`FormStudioBuilder error: ${json}`);
+    // Deliver outside the current render/handler: executing an action during
+    // render would update other components mid-render.
+    window.setTimeout(() => {
+      try {
+        sink?.deliver(json);
+      } catch {
+        // the reporter must never throw
+      }
+    }, 0);
+  } catch {
+    // the reporter must never throw
+  } finally {
+    fsReporting = false;
+  }
+}
+// Errors thrown from the widget's own handlers and promises. These listeners
+// only look at errors whose stack points into this widget's bundle, never call
+// preventDefault, and so never claim errors from the rest of the app. If the
+// bundle URL cannot be told apart from the app's, they stay off.
+const FSB_BUNDLE_URL: string = (() => {
+  try {
+    const frame = fsTrimStack(new Error().stack)[0] || "";
+    const match = frame.match(/(https?:\/\/[^\s)]+?\.m?js)/i);
+    const url = match ? match[1] : "";
+    return /formstudiobuilder/i.test(url) ? url : "";
+  } catch {
+    return "";
+  }
+})();
+let fsGlobalListenerCount = 0;
+function fsIsOwnStack(stack: unknown): boolean {
+  return !!FSB_BUNDLE_URL && String(stack ?? "").includes(FSB_BUNDLE_URL);
+}
+function fsOnWindowError(event: ErrorEvent): void {
+  if (fsIsOwnStack(event.error?.stack) || (FSB_BUNDLE_URL && event.filename === FSB_BUNDLE_URL)) {
+    fsReportError("handling a user action", event.error || event.message);
+  }
+}
+function fsOnUnhandledRejection(event: PromiseRejectionEvent): void {
+  if (fsIsOwnStack((event.reason as { stack?: unknown })?.stack)) {
+    fsReportError("finishing a background task", event.reason);
+  }
+}
+function fsAttachGlobalListeners(): () => void {
+  if (!FSB_BUNDLE_URL) {
+    return () => undefined;
+  }
+  if (fsGlobalListenerCount === 0) {
+    window.addEventListener("error", fsOnWindowError);
+    window.addEventListener("unhandledrejection", fsOnUnhandledRejection);
+  }
+  fsGlobalListenerCount += 1;
+  return () => {
+    fsGlobalListenerCount -= 1;
+    if (fsGlobalListenerCount === 0) {
+      window.removeEventListener("error", fsOnWindowError);
+      window.removeEventListener("unhandledrejection", fsOnUnhandledRejection);
+    }
+  };
 }
 const SIGNATURE_DRAW_PREFIX = "__sig_draw__";
 const SIGNATURE_TYPED_PREFIX = "__sig_typed__";
@@ -10957,7 +11161,8 @@ function insertSnippetIntoField(field: SnippetTargetField, text: string): void {
   const caret = before.length + inserted.length;
   try {
     field.setSelectionRange(caret, caret);
-  } catch (_error) {
+  } catch (error) {
+    fsReportError("placing the cursor", error);
     /* input types that reject selection ranges */
   }
 }
@@ -11177,6 +11382,7 @@ const RichTemplateEditor = forwardRef<
         document.execCommand("styleWithCSS", false, "false");
         document.execCommand(command, false, arg);
       } catch (error) {
+        fsReportError("formatting template text", error);
         // execCommand is best-effort; ignore unsupported commands
       }
       saveSelection();
@@ -11686,7 +11892,8 @@ function WidgetToasts({ attr }: { attr?: EditableValue<string> }): ReactElement 
     try {
       alreadyShown = alreadyShown || sessionStorage.getItem(seenKey) === "1";
       sessionStorage.setItem(seenKey, "1");
-    } catch (_error) {
+    } catch (error) {
+      fsReportError("remembering a shown message", error);
       // sessionStorage unavailable — ref dedupe still applies.
     }
     seenRef.current.add(seenKey);
@@ -11791,7 +11998,8 @@ const fsRailBus = {
     this.listeners.forEach((listener) => {
       try {
         listener();
-      } catch {
+      } catch (error) {
+        fsReportError("notifying a section listener", error);
         /* a broken listener must not break the rest */
       }
     });
@@ -12045,7 +12253,7 @@ function FsPageRail({ instanceId }: { instanceId: string }): ReactElement | null
   );
 }
 
-export default function FormStudioBuilder(
+function FormStudioBuilderMain(
   props: FormStudioBuilderProps
 ): ReactElement {
   // Signature-image mode: the binding is fixed at design time, so this branch
@@ -12053,6 +12261,12 @@ export default function FormStudioBuilder(
   if (props.signatureImageAttr) {
     return <SignatureImageView attr={props.signatureImageAttr} />;
   }
+  // First effect of this instance: later effects (template/answer parsing)
+  // report against this instance's sink, not the last one rendered.
+  const fsSink = useContext(FsSinkContext);
+  useEffect(() => {
+    fsCurrentSink = fsSink;
+  });
   const source = props.dataSource?.[0];
   // Per-widget-instance RJSF id prefix. The widget can be instantiated once
   // per ListView row; RJSF's default "root" prefix would then emit duplicate
@@ -12890,6 +13104,12 @@ export default function FormStudioBuilder(
         key: `${component.key}_label`,
         label: `${componentLabel} label`
       });
+      if (isChoiceFieldType(component.type)) {
+        options.push({
+          key: `${component.key}_value`,
+          label: `${componentLabel} stored value`
+        });
+      }
       if (component.type === "matrix") {
         getMatrixRows(component).forEach((row) => {
           const rowLabel = clean(row.label) || row.key;
@@ -14716,7 +14936,8 @@ export default function FormStudioBuilder(
         if (parsed && parsed.fsFieldClipboard === 1 && parsed.component) {
           raw = parsed.component;
         }
-      } catch (_error) {
+      } catch (error) {
+        fsReportError("reading a copied field", error);
         // fall through to the in-session fallback
       }
     }
@@ -15731,6 +15952,7 @@ export default function FormStudioBuilder(
       setJsonDataDraft(JSON.stringify(parsedData, null, 2));
       setJsonMessage("JSON formatted.");
     } catch (error) {
+      fsReportError("formatting JSON drafts", error);
       setJsonMessage(
         `Cannot format JSON: ${(error as Error)?.message || "Unknown error"}`
       );
@@ -15742,6 +15964,7 @@ export default function FormStudioBuilder(
     try {
       parsedDefinitionText = JSON.stringify(JSON.parse(jsonDefinitionDraft));
     } catch (error) {
+      fsReportError("applying definition JSON", error);
       setJsonMessage(
         `Definition JSON is invalid: ${
           (error as Error)?.message || "Unknown error"
@@ -15752,6 +15975,7 @@ export default function FormStudioBuilder(
     try {
       parsedDataText = JSON.stringify(JSON.parse(jsonDataDraft));
     } catch (error) {
+      fsReportError("applying form data JSON", error);
       setJsonMessage(
         `Form data JSON is invalid: ${
           (error as Error)?.message || "Unknown error"
@@ -19590,6 +19814,12 @@ export default function FormStudioBuilder(
                                   <code>{`<fieldKey>_label`}</code> (field
                                   label){" "}
                                 </li>{" "}
+                                <li>
+                                  {" "}
+                                  <code>{`<fieldKey>_value`}</code> (stored
+                                  value of a dropdown, radio or yes/no field;
+                                  the plain token prints its option label){" "}
+                                </li>{" "}
                               </ul>{" "}
                               <div className="rjsf-builder__token-help-subtitle">
                                 {" "}
@@ -22023,5 +22253,99 @@ export default function FormStudioBuilder(
         </Fragment>
       )}{" "}
     </div>
+  );
+}
+interface FsErrorBoundaryProps {
+  children: ReactNode;
+  className?: string;
+  sink: FsErrorSink;
+}
+interface FsErrorBoundaryState {
+  failed: boolean;
+}
+// Render errors show a plain message instead of a blank area. Answers live on
+// the server object, so nothing saved is touched; "Try again" re-renders.
+class FsErrorBoundary extends Component<FsErrorBoundaryProps, FsErrorBoundaryState> {
+  state: FsErrorBoundaryState = { failed: false };
+  static getDerivedStateFromError(): FsErrorBoundaryState {
+    return { failed: true };
+  }
+  componentDidCatch(error: Error, _info: ErrorInfo): void {
+    fsCurrentSink = this.props.sink;
+    fsReportError("displaying the form", error);
+  }
+  render(): ReactNode {
+    if (!this.state.failed) {
+      return this.props.children;
+    }
+    return (
+      <div className={`fsb-error-boundary ${this.props.className || ""}`} role="alert">
+        <p className="fsb-error-boundary__text">
+          This section could not be displayed. Your saved answers are safe.
+        </p>
+        <button
+          type="button"
+          className="btn btn-default fsb-error-boundary__retry"
+          onClick={() => this.setState({ failed: false })}
+        >
+          Try again
+        </button>
+      </div>
+    );
+  }
+}
+function FsTestRenderFault(): null {
+  throw new Error("fsb test fault: render");
+}
+export default function FormStudioBuilder(
+  props: FormStudioBuilderProps
+): ReactElement {
+  const propsRef = useRef(props);
+  propsRef.current = props;
+  const sinkRef = useRef<FsErrorSink | null>(null);
+  if (!sinkRef.current) {
+    sinkRef.current = {
+      viewMode: () => String(propsRef.current.viewMode || ""),
+      template: () => {
+        const p = propsRef.current;
+        const title = p.dataSource?.[0]?.formTitleAttr;
+        if (title && title.status === "available" && title.value) {
+          return String(title.value);
+        }
+        const raw = p.dataSource?.[0]?.formDefinitionAttr;
+        const text = raw && raw.status === "available" ? String(raw.value || "") : "";
+        const match = text.match(/"title"\s*:\s*"([^"]{0,120})"/);
+        return match ? match[1] : "";
+      },
+      deliver: (report: string) => {
+        const action = propsRef.current.onErrorAction;
+        if (!action || !action.canExecute) {
+          return false;
+        }
+        action.execute({ report });
+        return true;
+      }
+    };
+  }
+  // Module-level parsers report to whichever instance rendered last.
+  fsCurrentSink = sinkRef.current;
+  useEffect(() => fsAttachGlobalListeners(), []);
+  useEffect(() => {
+    fsCurrentSink = sinkRef.current;
+    if (FSB_TEST_FAULT === "reject") {
+      Promise.reject(new Error("fsb test fault: rejected promise"));
+    } else if (FSB_TEST_FAULT === "repeat") {
+      for (let i = 0; i < 50; i += 1) {
+        fsReportError("test: repeated error", new Error("fsb test fault: repeat"));
+      }
+    }
+  }, []);
+  return (
+    <FsSinkContext.Provider value={sinkRef.current}>
+      <FsErrorBoundary className={props.class} sink={sinkRef.current}>
+        {FSB_TEST_FAULT === "render" ? <FsTestRenderFault /> : null}
+        <FormStudioBuilderMain {...props} />
+      </FsErrorBoundary>
+    </FsSinkContext.Provider>
   );
 }

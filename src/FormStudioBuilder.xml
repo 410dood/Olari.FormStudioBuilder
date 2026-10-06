@@ -474,6 +474,15 @@
             <description>Optional Mendix widgets rendered in the designer toolbar right after the Save button (e.g. the page's Publish/Close buttons).</description>
         </property>
 
+        <property key="onErrorAction" type="action" required="false">
+            <caption>On error</caption>
+            <category>Behavior</category>
+            <description>Called when the widget hits an internal error (render failure, unreadable template, failed handler). The 'report' variable is a JSON string with no answer values or personal data; map it to a microflow String parameter and log it. Deduplicated and rate-limited in the browser.</description>
+            <actionVariables>
+                <actionVariable key="report" type="String" caption="Error report (JSON)" />
+            </actionVariables>
+        </property>
+
         <systemProperty key="Editability" />
     </properties>
 </widget>
