@@ -5004,3 +5004,20 @@ details.rjsf-builder__group[open] .rjsf-builder__group-chev { transform: rotate(
 .rjsf-builder__array-list:empty::before {
   content: "No rows yet";
 }
+
+/* Value & prefill: default-value checklist for multi-select choice fields */
+.rjsf-builder__default-options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 6px 8px;
+  border: 1px solid var(--rb-border, #d9dde3);
+  border-radius: 6px;
+  background: var(--rb-surface, #fff);
+}
+.rjsf-builder__default-option {
+  margin: 0;
+  font-weight: 400;
+}

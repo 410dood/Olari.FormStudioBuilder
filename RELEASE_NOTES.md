@@ -1,3 +1,10 @@
+## 0.8.6 (multi-select default values)
+- FIX: "Default value" for a multi-select dropdown / checkbox-list field was a free-text box whose input was normalized on every keystroke against the option values, so partial text was dropped and the box could never be typed into. Choice fields with options now get a real picker in Value & prefill: a checklist of the field's options for multi-select (stored as string[] in option order, labels shown, values stored) and a dropdown with "None" for single-select. Other field types keep the text box. No definition JSON format change; schema generation already emitted array defaults.
+- FIX: clearing every option on a multi-select field that has configured defaults now sticks. The dropdown widget emits [] instead of undefined, and sanitizeFormData keeps an explicit [] for such fields, so RJSF no longer re-applies the schema default and re-checks the cleared options.
+- Value & prefill group peek shows "N defaults" for array defaults.
+- Changing a choice field's default (checklist or dropdown) also mirrors the value into the designer canvas data (updateComponentDefaultValue), so Live Preview / Preview show the new default immediately instead of whatever RJSF captured on the first click.
+- No widget XML change.
+
 ## 0.1.35 (shared fields prefill from registry value)
 - Shared-field placements (`sharedFieldRef`) now prefill in the viewer from the token context like `prefillTokenKey` fields do — the context carries the newest shared answer (server resolves it via FormAnswer), so "reads from intake" works on first open. Same weak semantics: applied only while the field has no answer.
 

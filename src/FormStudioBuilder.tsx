@@ -6541,7 +6541,18 @@ function sanitizeValueForComponent(
   }
   if (component.type === "select" || component.type === "radio") {
     if (component.multiSelect) {
-      return normalizeMultiSelectValues(value, component.options);
+      const values = normalizeMultiSelectValues(value, component.options);
+      if (values) {
+        return values;
+      }
+      // Keep an explicit [] when the user has cleared every option on a
+      // field that has configured defaults. Dropping the key would make RJSF
+      // re-apply the schema default and re-check the cleared options.
+      const hasDefault = Boolean(
+        normalizeMultiSelectValues(component.defaultValue, component.options)
+          ?.length
+      );
+      return hasDefault && Array.isArray(value) ? [] : undefined;
     }
     if (Array.isArray(value)) {
       const first = clean(value[0]);
@@ -8552,7 +8563,10 @@ function MultiSelectDropdownWidget(props: any): ReactElement {
           ? !isSelected(optionValue)
           : isSelected(optionValue)
       );
-    onChange(next.length ? next : undefined);
+    // Emit [] (not undefined) when everything is unchecked: RJSF re-applies
+    // the schema default to an undefined field, which would re-check a
+    // configured default the user has just cleared.
+    onChange(next);
   };
   const summary = enumOptions
     .filter((option) => isSelected(option.value))
@@ -12941,6 +12955,52 @@ function FormStudioBuilderMain(
         selectedIdRef.current
       );
       persist(nextDefinition, formDataRef.current, true);
+    },
+    [persist, pushUndoSnapshot]
+  );
+  /** Sets a choice field's default and mirrors it into the designer canvas
+   *  data so Live Preview / Preview show the new default right away. RJSF only
+   *  applies a schema default while the key is absent, so without this the
+   *  canvas would keep whatever it captured on the first click. A new form
+   *  instance starts empty and gets the default from the schema. */
+  const updateComponentDefaultValue = useCallback(
+    (componentId: string, nextDefaultValue: FormComponent["defaultValue"]) => {
+      if (!hasHydratedDefinitionRef.current) {
+        return;
+      }
+      const currentDefinition = definitionRef.current;
+      const target = currentDefinition.components.find(
+        (component) => component.id === componentId
+      );
+      if (!target) {
+        return;
+      }
+      const nextDefinition: FormDefinition = {
+        ...currentDefinition,
+        components: currentDefinition.components.map((component) =>
+          component.id === componentId
+            ? { ...component, defaultValue: nextDefaultValue }
+            : component
+        )
+      };
+      const nextData: JsonObject = { ...formDataRef.current };
+      if (!target.repeatGroup?.key) {
+        const empty =
+          nextDefaultValue == null ||
+          nextDefaultValue === "" ||
+          (Array.isArray(nextDefaultValue) && !nextDefaultValue.length);
+        if (empty) {
+          delete nextData[target.key];
+        } else {
+          nextData[target.key] = nextDefaultValue as JsonObject[string];
+        }
+      }
+      pushUndoSnapshot(
+        currentDefinition,
+        formDataRef.current,
+        selectedIdRef.current
+      );
+      persist(nextDefinition, nextData, true);
     },
     [persist, pushUndoSnapshot]
   );
@@ -19930,8 +19990,16 @@ function FormStudioBuilderMain(
                           Value &amp; prefill
                           <span className="rjsf-builder__group-peek">
                             {clean(selectedComponent.prefillTokenKey) ||
-                              (selectedComponent.defaultValue != null &&
-                              selectedComponent.defaultValue !== ""
+                              (Array.isArray(selectedComponent.defaultValue)
+                                ? selectedComponent.defaultValue.length
+                                  ? `${selectedComponent.defaultValue.length} default${
+                                      selectedComponent.defaultValue.length === 1
+                                        ? ""
+                                        : "s"
+                                    }`
+                                  : "none"
+                                : selectedComponent.defaultValue != null &&
+                                  selectedComponent.defaultValue !== ""
                                 ? "default set"
                                 : "none")}
                           </span>
@@ -19974,26 +20042,128 @@ function FormStudioBuilderMain(
                       <label className="rjsf-builder__field">
                         {" "}
                         <span>Default value</span>{" "}
-                        <input
-                          className="rjsf-builder__input"
-                          value={str(selectedComponent.defaultValue ?? "")}
-                          onChange={(event) =>
-                            updateDefinition((current) => ({
-                              ...current,
-                              components: current.components.map((component) =>
-                                component.id === selectedComponent.id
-                                  ? {
-                                      ...component,
-                                      defaultValue: ensureValueShape(
-                                        component,
-                                        event.target.value
-                                      )
-                                    }
-                                  : component
-                              )
-                            }))
-                          }
-                        />{" "}
+                        {(selectedComponent.type === "select" ||
+                          selectedComponent.type === "radio") &&
+                        selectedComponent.options?.length ? (
+                          selectedComponent.multiSelect ? (
+                            // Multi-select: one checkbox per option, stored
+                            // as string[] in option order (labels shown,
+                            // values stored). A free-text box can't express
+                            // this - normalizeMultiSelectValues drops any
+                            // partial text, so typing was impossible.
+                            <div
+                              className="rjsf-builder__default-options"
+                              role="group"
+                              aria-label="Default selected options"
+                            >
+                              {selectedComponent.options
+                                .map((option) => clean(option))
+                                .filter(Boolean)
+                                .map((optionValue) => {
+                                  const checked = (
+                                    normalizeMultiSelectValues(
+                                      selectedComponent.defaultValue,
+                                      selectedComponent.options
+                                    ) || []
+                                  ).includes(optionValue);
+                                  return (
+                                    <label
+                                      key={optionValue}
+                                      className="rjsf-builder__toggle rjsf-builder__default-option"
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        onChange={(event) => {
+                                          const isChecked =
+                                            event.target.checked;
+                                          const currentValues =
+                                            normalizeMultiSelectValues(
+                                              selectedComponent.defaultValue,
+                                              selectedComponent.options
+                                            ) || [];
+                                          const nextValues = (
+                                            selectedComponent.options || []
+                                          )
+                                            .map((item) => clean(item))
+                                            .filter(Boolean)
+                                            .filter((item) =>
+                                              item === optionValue
+                                                ? isChecked
+                                                : currentValues.includes(item)
+                                            );
+                                          updateComponentDefaultValue(
+                                            selectedComponent.id,
+                                            nextValues
+                                          );
+                                        }}
+                                      />{" "}
+                                      <span>
+                                        {clean(
+                                          selectedComponent.optionLabels?.[
+                                            optionValue
+                                          ]
+                                        ) || optionValue}
+                                      </span>
+                                    </label>
+                                  );
+                                })}
+                            </div>
+                          ) : (
+                            <select
+                              className="rjsf-builder__input"
+                              value={
+                                typeof selectedComponent.defaultValue ===
+                                "string"
+                                  ? selectedComponent.defaultValue
+                                  : ""
+                              }
+                              onChange={(event) => {
+                                const nextValue = event.target.value;
+                                updateComponentDefaultValue(
+                                  selectedComponent.id,
+                                  nextValue === "" ? undefined : nextValue
+                                );
+                              }}
+                            >
+                              <option value="">None</option>
+                              {selectedComponent.options
+                                .map((option) => clean(option))
+                                .filter(Boolean)
+                                .map((optionValue) => (
+                                  <option key={optionValue} value={optionValue}>
+                                    {clean(
+                                      selectedComponent.optionLabels?.[
+                                        optionValue
+                                      ]
+                                    ) || optionValue}
+                                  </option>
+                                ))}
+                            </select>
+                          )
+                        ) : (
+                          <input
+                            className="rjsf-builder__input"
+                            value={str(selectedComponent.defaultValue ?? "")}
+                            onChange={(event) =>
+                              updateDefinition((current) => ({
+                                ...current,
+                                components: current.components.map(
+                                  (component) =>
+                                    component.id === selectedComponent.id
+                                      ? {
+                                          ...component,
+                                          defaultValue: ensureValueShape(
+                                            component,
+                                            event.target.value
+                                          )
+                                        }
+                                      : component
+                                )
+                              }))
+                            }
+                          />
+                        )}{" "}
                       </label>
                     ) : null}{" "}
                     {isPropertiesTab && selectedComponentSharedEntry ? (
