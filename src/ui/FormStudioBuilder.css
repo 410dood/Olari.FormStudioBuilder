@@ -6,6 +6,7 @@
   --rb-muted: #5f6b7a;
   --rb-accent: #2f6feb;
   --rb-accent-strong: #1f57c9;
+  --rb-accent-tint: color-mix(in srgb, var(--rb-accent) 10%, transparent);
   --rb-danger: #c0362c;
   --rb-shadow: 0 10px 24px rgba(20, 33, 61, 0.08);
   font-family: "Inter", "Segoe UI", sans-serif;
@@ -1951,8 +1952,13 @@ input.rjsf-builder__num-stepper-input::-webkit-inner-spin-button {
 .rjsf-builder__viewer textarea,
 .rjsf-builder__panel--preview textarea,
 .rjsf-builder__panel--preview-full textarea {
+  /* Auto-grow (Bill 2026-11-04): the box follows its text instead of a fixed
+     40px. field-sizing is zero-cost per keystroke (no layout reads);
+     Chrome/Edge only by design (no JS fallback). A manual
+     drag still works: the inline height it sets wins over field-sizing. */
   min-height: 40px;
-  height: 40px;
+  height: auto;
+  field-sizing: content;
   resize: vertical;
 }
 
@@ -3013,30 +3019,6 @@ input.rjsf-builder__num-stepper-input::-webkit-inner-spin-button {
 .rjsf-builder__item-action:focus-visible {
   outline: 2px solid rgba(47, 111, 235, 0.4);
   outline-offset: 1px;
-}
-
-.rjsf-builder__resize-handle {
-  position: absolute;
-  right: 4px;
-  bottom: 4px;
-  width: 14px;
-  height: 14px;
-  border-radius: 4px;
-  cursor: ew-resize;
-  user-select: none;
-  background:
-    linear-gradient(135deg, transparent 42%, rgba(95, 107, 122, 0.8) 42%, rgba(95, 107, 122, 0.8) 54%, transparent 54%),
-    linear-gradient(135deg, transparent 62%, rgba(95, 107, 122, 0.5) 62%, rgba(95, 107, 122, 0.5) 72%, transparent 72%);
-}
-
-.rjsf-builder__resize-handle:hover {
-  background:
-    linear-gradient(135deg, transparent 42%, rgba(47, 111, 235, 0.9) 42%, rgba(47, 111, 235, 0.9) 54%, transparent 54%),
-    linear-gradient(135deg, transparent 62%, rgba(47, 111, 235, 0.7) 62%, rgba(47, 111, 235, 0.7) 72%, transparent 72%);
-}
-
-.rjsf-builder__resize-handle:active {
-  transform: scale(1.05);
 }
 
 .rjsf-builder__inline-dropzone {
@@ -5020,4 +5002,460 @@ details.rjsf-builder__group[open] .rjsf-builder__group-chev { transform: rotate(
 .rjsf-builder__default-option {
   margin: 0;
   font-weight: 400;
+}
+
+/* ---- Opt-in: showMissingRequired (viewer fill form) ---------------------- */
+.rjsf-builder__field--missing {
+  scroll-margin: 96px 0 160px;
+}
+
+.rjsf-builder__field--missing textarea.form-control,
+.rjsf-builder__field--missing input.form-control,
+.rjsf-builder__field--missing select.form-control,
+.rjsf-builder__field--missing .rjsf-builder__msd-trigger {
+  border-color: #b42318;
+  box-shadow: 0 0 0 3px rgba(180, 35, 24, 0.14);
+}
+
+.rjsf-builder__field--missing::after {
+  content: attr(data-fs-missing);
+  display: block;
+  margin-top: 6px;
+  color: #b42318;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+/* ---- Opt-in: previewAnswerLayout = stacked (viewer document preview) ------ */
+.rjsf-builder__document-preview--stacked .fsdoc .fsdoc-value.fsdoc-empty {
+  color: #6c717c;
+}
+
+.rjsf-builder__document-preview--stacked .fsdoc .fsdoc-value--yes::before {
+  content: "\2713";
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: #1f8f5f;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}
+
+.rjsf-builder--phone .rjsf-builder__document-preview--stacked .fsdoc .fsdoc-row:not(.fsdoc-matrix .fsdoc-row) {
+  display: block;
+}
+
+.rjsf-builder--phone .rjsf-builder__document-preview--stacked .fsdoc .fsdoc-row:not(.fsdoc-matrix .fsdoc-row) .fsdoc-label {
+  display: block;
+}
+
+.rjsf-builder--phone .rjsf-builder__document-preview--stacked .fsdoc .fsdoc-row:not(.fsdoc-matrix .fsdoc-row) .fsdoc-value {
+  display: block;
+  margin-top: 2px;
+}
+
+/* ---- "Staff only" questions (designer canvas + staff fill form) ---------- */
+.rjsf-builder__field--staff-only > label::after,
+.rjsf-builder__field--staff-only > .control-label::after,
+.rjsf-builder__field--staff-only.rjsf-field-boolean::before,
+.rjsf-builder__field--staff-only.rjsf-builder__field--content-block::before,
+.rjsf-builder__field--staff-only.rjsf-builder__field-label-hidden::before,
+.rjsf-builder__field--staff-only.rjsf-builder__field--matrix::before,
+.rjsf-builder__field--staff-only.rjsf-field-array:not(.rjsf-builder__field--choice-multi)::before {
+  content: "Staff only";
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border: 1px solid #e3c877;
+  border-radius: 999px;
+  background: #fdf3d1;
+  color: #6b4e00;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.rjsf-builder__field--staff-only.rjsf-field-boolean::before,
+.rjsf-builder__field--staff-only.rjsf-builder__field--content-block::before,
+.rjsf-builder__field--staff-only.rjsf-builder__field-label-hidden::before,
+.rjsf-builder__field--staff-only.rjsf-builder__field--matrix::before,
+.rjsf-builder__field--staff-only.rjsf-field-array:not(.rjsf-builder__field--choice-multi)::before {
+  display: block;
+  width: fit-content;
+  margin: 0 0 4px;
+  grid-column: 1 / -1;
+}
+
+/* a field that shows its label AND matches a block rule above gets one marker */
+.rjsf-builder__field--staff-only.rjsf-builder__field-label-hidden > label::after,
+.rjsf-builder__field--staff-only.rjsf-builder__field-label-hidden > .control-label::after,
+.rjsf-builder__field--staff-only.rjsf-builder__field--matrix > label::after,
+.rjsf-builder__field--staff-only.rjsf-builder__field--matrix > .control-label::after,
+.rjsf-builder__field--staff-only.rjsf-builder__field--content-block > label::after,
+.rjsf-builder__field--staff-only.rjsf-field-array:not(.rjsf-builder__field--choice-multi) > label::after {
+  content: none;
+}
+
+.rjsf-builder__staff-only-setting {
+  display: block;
+}
+
+.rjsf-builder__staff-only-setting .rjsf-builder__help {
+  margin-top: 4px;
+}
+
+/* ---- lockClientAnswers: questions staff cannot change here ---------------- */
+.rjsf-builder__field--locked {
+  cursor: not-allowed;
+}
+
+.rjsf-builder__field--locked .form-control,
+.rjsf-builder__field--locked textarea,
+.rjsf-builder__field--locked select,
+.rjsf-builder__field--locked input,
+.rjsf-builder .rjsf-builder__field--locked button.rjsf-builder__msd-trigger {
+  background-color: #f3f4f6;
+  color: #4b5563;
+  border-color: #e2e4e9;
+  box-shadow: none;
+}
+
+.rjsf-builder__field--locked .required,
+.rjsf-builder__field--locked .rjsf-builder__snippets-trigger {
+  display: none;
+}
+
+/* ============================================================
+   0.12.0 designer: Check, rules in plain words, Logic list,
+   Design | Preview, edge resize. Designer only. Selectors are
+   doubled up (.rjsf-builder + class) so the legacy widget CSS,
+   which is aggregated after this file, cannot override them.
+   ============================================================ */
+.rjsf-builder .rjsf-builder__check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.rjsf-builder .rjsf-builder__pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 4px 11px;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.2;
+  border: 1px solid transparent;
+}
+
+.rjsf-builder .rjsf-builder__pill--bad {
+  background: rgba(192, 54, 44, 0.1);
+  color: var(--rb-danger);
+  border-color: var(--rb-danger);
+}
+
+.rjsf-builder .rjsf-builder__pill--ok {
+  background: rgba(30, 138, 95, 0.1);
+  color: #1e8a5f;
+  border-color: #1e8a5f;
+}
+
+.rjsf-builder .rjsf-builder__check-step {
+  padding: 2px 9px;
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.rjsf-builder .rjsf-builder__canvas-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.rjsf-builder .rjsf-builder__seg {
+  display: inline-flex;
+  border: 1px solid var(--rb-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.rjsf-builder .rjsf-builder__seg-btn {
+  border: 0;
+  background: var(--rb-surface);
+  color: var(--rb-text);
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.rjsf-builder .rjsf-builder__seg-btn + .rjsf-builder__seg-btn {
+  border-left: 1px solid var(--rb-border);
+}
+
+.rjsf-builder .rjsf-builder__seg-btn:hover {
+  color: var(--rb-accent);
+}
+
+.rjsf-builder .rjsf-builder__seg-btn.is-active {
+  background: var(--rb-accent-tint);
+  color: var(--rb-accent-strong);
+  font-weight: 600;
+}
+
+.rjsf-builder .rjsf-builder__preview-as {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  /* Keep "Preview as" and its select together: the head wraps as a group
+     instead of squeezing the label onto two lines. */
+  white-space: nowrap !important;
+  flex: 0 0 auto;
+}
+
+.rjsf-builder .rjsf-builder__device {
+  transition: max-width 0.2s;
+  /* The preview panel is a grid, where an auto-margined item shrinks to its
+     content: Desktop (no auto margins) stretches to fill the pane; Phone is
+     capped by max-width and centred. */
+  justify-self: stretch;
+  box-sizing: border-box;
+}
+
+.rjsf-builder .rjsf-builder__device--phone {
+  max-width: 390px;
+  width: 100%;
+  margin: 0 auto;
+  border: 1px solid var(--rb-border);
+  border-radius: 22px;
+  padding: 14px 10px;
+  background: var(--rb-bg);
+  /* The device is its own form pane: the @container fs-formpane rules see a
+     390px pane and switch to the narrow layout. */
+  container-type: inline-size;
+  container-name: fs-formpane;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rjsf-builder .rjsf-builder__device {
+    transition: none;
+  }
+}
+
+.rjsf-builder .rjsf-builder__preview-note {
+  font-size: 12.5px;
+  background: var(--rb-accent-tint);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+}
+
+/* Right rail: Properties | Logic | Problems */
+.rjsf-builder .rjsf-builder__rail-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* Looks come from .rjsf-builder__panel-tab; this adds room for the count. */
+.rjsf-builder .rjsf-builder__rail-tab {
+  display: inline-flex;
+  align-items: center;
+}
+
+.rjsf-builder .rjsf-builder__rail-count {
+  margin-left: 6px;
+  background: #eef1f6;
+  color: var(--rb-text);
+  border-radius: 999px;
+  padding: 0 7px;
+  font-size: 11px;
+}
+
+.rjsf-builder .rjsf-builder__rail-list {
+  min-width: 0;
+}
+
+.rjsf-builder .rjsf-builder__rail-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 7px;
+}
+
+.rjsf-builder .rjsf-builder__rail-item {
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+  border: 1px solid var(--rb-border);
+  border-left: 3px solid #b7791f;
+  background: var(--rb-surface);
+  color: var(--rb-text);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rjsf-builder .rjsf-builder__rail-item--problem {
+  border-left-color: var(--rb-danger);
+}
+
+.rjsf-builder .rjsf-builder__rail-item:hover,
+.rjsf-builder .rjsf-builder__rail-item.is-selected {
+  border-color: var(--rb-accent);
+}
+
+.rjsf-builder .rjsf-builder__rail-item small {
+  color: var(--rb-muted);
+  font-size: 11.5px;
+}
+
+.rjsf-builder .rjsf-builder__rail-line {
+  overflow-wrap: anywhere;
+}
+
+.rjsf-builder .rjsf-builder__rail-missing {
+  color: var(--rb-danger);
+  font-weight: 600;
+}
+
+/* Canvas: rule chips, problems, source / dependant outlines */
+.rjsf-builder .rjsf-builder__rule-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+.rjsf-builder .rjsf-builder__rule-chip {
+  font-size: 11.5px;
+  line-height: 1.4;
+  border-radius: 999px;
+  padding: 1px 9px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.rjsf-builder .rjsf-builder__rule-chip--rule,
+.rjsf-builder .rjsf-builder__rule-chip--source {
+  background: #fbf0d6;
+  color: #8a5a00;
+}
+
+.rjsf-builder .rjsf-builder__rule-chip--controls,
+.rjsf-builder .rjsf-builder__rule-chip--dependant {
+  background: var(--rb-accent-tint);
+  color: var(--rb-accent-strong);
+}
+
+.rjsf-builder .rjsf-builder__rule-chip--source,
+.rjsf-builder .rjsf-builder__rule-chip--dependant {
+  font-weight: 700;
+}
+
+.rjsf-builder .rjsf-builder__field-problems {
+  display: grid;
+  gap: 2px;
+  margin-top: 6px;
+}
+
+.rjsf-builder .rjsf-builder__field-problem {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--rb-danger);
+  overflow-wrap: anywhere;
+}
+
+.rjsf-builder .rjsf-builder__col.rjsf-builder__col--problem {
+  border: 1px solid var(--rb-danger);
+  border-radius: 8px;
+  background: rgba(192, 54, 44, 0.05);
+}
+
+.rjsf-builder .rjsf-builder__col.rjsf-builder__col--source {
+  border: 1px dashed #b7791f;
+  border-radius: 8px;
+  background: rgba(251, 240, 214, 0.45);
+}
+
+.rjsf-builder .rjsf-builder__col.rjsf-builder__col--dependant {
+  border: 1px dashed var(--rb-accent);
+  border-radius: 8px;
+  background: rgba(47, 111, 235, 0.05);
+}
+
+/* Edge resize handle (replaces the corner grip on fields). The legacy
+   RjsfFormBuilder widget CSS, aggregated after this file, still styles the
+   same class as a corner grip (position, size, gradient, :hover, :active at
+   specificity 0,1,0 and 0,2,0); this rule is 0,3,0 and sets every property
+   that grip sets, so none of it shows. */
+.rjsf-builder .rjsf-builder__col .rjsf-builder__resize-handle {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  right: -1px;
+  left: auto;
+  width: 12px;
+  height: auto;
+  border-radius: 0;
+  background: none;
+  transform: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: ew-resize;
+  touch-action: none;
+  user-select: none;
+  opacity: 0;
+  z-index: 5;
+}
+
+.rjsf-builder .rjsf-builder__col .rjsf-builder__resize-handle::before {
+  content: "";
+  width: 4px;
+  height: 60%;
+  min-height: 18px;
+  border-radius: 3px;
+  background: var(--rb-accent);
+}
+
+.rjsf-builder .rjsf-builder__col .rjsf-builder__resize-handle:hover::before {
+  background: var(--rb-accent-strong);
+}
+
+.rjsf-builder .rjsf-builder__col:hover > .rjsf-builder__resize-handle,
+.rjsf-builder .rjsf-builder__col.rjsf-builder__col--selected > .rjsf-builder__resize-handle,
+.rjsf-builder .rjsf-builder__col.rjsf-builder__col--resizing > .rjsf-builder__resize-handle,
+.rjsf-builder .rjsf-builder__col .rjsf-builder__resize-handle:focus-visible {
+  opacity: 1;
+}
+
+.rjsf-builder .rjsf-builder__resize-badge {
+  position: absolute;
+  right: 14px;
+  bottom: -11px;
+  z-index: 6;
+  background: var(--rb-accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 6px;
+  padding: 1px 7px;
+  pointer-events: none;
 }

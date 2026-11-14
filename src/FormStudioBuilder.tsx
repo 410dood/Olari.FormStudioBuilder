@@ -207,6 +207,19 @@ export interface FormStudioBuilderProps {
   showViewerHeader?: boolean | DynamicValue<boolean>;
   showDocumentPreview?: boolean | DynamicValue<boolean>;
   previewFlow?: "cards" | "continuous";
+  /** Viewer fill form: mark every unanswered required question (opt-in). */
+  showMissingRequired?: boolean | DynamicValue<boolean>;
+  /** Viewer document preview: "stacked" puts the question above its answer on
+   *  phone widths, prints "Not answered" instead of a dash and ticks "Yes". */
+  previewAnswerLayout?: "standard" | "stacked";
+  /** Viewer: "client" leaves out every question marked Staff only (fill form
+   *  and document preview), does not count them and keeps their stored
+   *  answers untouched when the client's answers are saved. */
+  audience?: "staff" | "client";
+  /** Viewer fill form: only questions marked Staff only can be edited; every
+   *  other question is shown locked (staff completing their part after the
+   *  client's answers were submitted). */
+  lockClientAnswers?: boolean | DynamicValue<boolean>;
   formLiveValidate?: boolean | DynamicValue<boolean>;
   saveButtonText?: string;
   exportPdfButtonText?: string;
@@ -249,6 +262,10 @@ interface FormComponent {
   label: string;
   type: FieldType;
   required: boolean;
+  /** Staff only: hidden from the client when the client fills in this form
+   *  (viewer audience "client"). Staff always see and answer it. Written only
+   *  when true. */
+  staffOnly?: boolean;
   description?: string;
   documentOutputTemplate?: string;
   /** Per-answer document output: option value -> narrative template ("" omits the field). */
@@ -1938,10 +1955,22 @@ const TOKEN_PREFILL_EXCLUDED_TYPES: ReadonlySet<FieldType> = new Set<FieldType>(
 function coerceTokenPrefillValue(
   component: FormComponent,
   raw: string
-): string | number | boolean | undefined {
+): string | number | boolean | string[] | undefined {
   const value = clean(raw);
   if (!value) {
     return undefined;
+  }
+  if (
+    component.multiSelect &&
+    (component.type === "select" || component.type === "radio")
+  ) {
+    // A multi-select choice is prefilled only when the chart value is one of
+    // its options (by value or by label); otherwise the question stays open.
+    const single = coerceTokenPrefillValue(
+      { ...component, multiSelect: false },
+      raw
+    );
+    return typeof single === "string" && single ? [single] : undefined;
   }
   switch (component.type) {
     case "checkbox": {
@@ -2035,6 +2064,9 @@ function hasExistingAnswer(value: unknown): boolean {
   if (value === undefined || value === null) {
     return false;
   }
+  if (Array.isArray(value)) {
+    return value.length > 0;
+  }
   if (typeof value === "string") {
     return value.trim() !== "";
   }
@@ -2054,7 +2086,9 @@ function applyTokenPrefill(
     if (
       !tokenKey ||
       TOKEN_PREFILL_EXCLUDED_TYPES.has(component.type) ||
-      component.multiSelect ||
+      (component.multiSelect &&
+        component.type !== "select" &&
+        component.type !== "radio") ||
       component.repeatGroup
     ) {
       return;
@@ -2094,7 +2128,9 @@ function computePrefilledKeys(
     if (
       !tokenKey ||
       TOKEN_PREFILL_EXCLUDED_TYPES.has(component.type) ||
-      component.multiSelect ||
+      (component.multiSelect &&
+        component.type !== "select" &&
+        component.type !== "radio") ||
       component.repeatGroup
     ) {
       return;
@@ -2728,6 +2764,19 @@ function outputValueHtml(
   return replaceOutputTokens(`{${tokenKey}}`, tokenValues)
     .trim()
     .replace(/\r?\n/g, "<br />");
+}
+/** Opt-in screen reading aid (previewAnswerLayout = stacked). Works on the
+ *  finished preview HTML only, so the shared document output (and with it the
+ *  PDF) stays byte-for-byte what it was. */
+function decorateStackedPreviewHtml(html: string): string {
+  if (!html) {
+    return html;
+  }
+  return html
+    .split(`<span class="fsdoc-value fsdoc-empty">${OUTPUT_DASH}</span>`)
+    .join('<span class="fsdoc-value fsdoc-empty">Not answered</span>')
+    .split('<span class="fsdoc-value">Yes</span>')
+    .join('<span class="fsdoc-value fsdoc-value--yes">Yes</span>');
 }
 /** A label longer than this (plain text) no longer fits the label column, so
  *  the row prints label-above like a long answer does. Matrix rows are exempt
@@ -5231,8 +5280,17 @@ function applyNumberBounds(
   }
   return next;
 }
-function buildFieldClassNames(component: FormComponent): string | undefined {
+function buildFieldClassNames(
+  component: FormComponent,
+  lockedIds?: Set<string> | null
+): string | undefined {
   const classes: string[] = [];
+  if (component.staffOnly === true) {
+    classes.push("rjsf-builder__field--staff-only");
+  }
+  if (lockedIds && lockedIds.has(component.id)) {
+    classes.push("rjsf-builder__field--locked");
+  }
   if (component.hideLabel) {
     classes.push("rjsf-builder__field-label-hidden");
   }
@@ -5651,12 +5709,17 @@ function normalizeBuilderOptions(value: any): BuilderOptions {
     outputGroupTitles: value?.outputGroupTitles !== false
   };
 }
-function snapColumnSpan(rawValue: number, snapEnabled: boolean): number {
+/** Nearest stop wins; a tie goes to the smaller stop. */
+function snapColumnSpan(
+  rawValue: number,
+  snapEnabled: boolean,
+  stops: readonly number[] = COLUMN_SPAN_SNAP_STOPS
+): number {
   const clamped = clamp(Math.floor(Number(rawValue) || 1), 1, 12);
   if (!snapEnabled) {
     return clamped;
   }
-  return COLUMN_SPAN_SNAP_STOPS.reduce((closest, current) =>
+  return stops.reduce((closest, current) =>
     Math.abs(current - clamped) < Math.abs(closest - clamped)
       ? current
       : closest
@@ -6032,6 +6095,7 @@ function normalizeComponent(item: any, index: number): FormComponent {
       type === "total" || type === "systemDatagrid2" || type === "contentBlock"
         ? false
         : toBoolean(item?.required),
+    staffOnly: toBoolean(item?.staffOnly) ? true : undefined,
     description:
       item?.description == null ? undefined : String(item?.description),
     documentOutputTemplate: rawDocumentOutputTemplate,
@@ -6164,6 +6228,111 @@ function normalizeComponent(item: any, index: number): FormComponent {
     visibility: normalizeVisibility(visibilitySource)
   };
 }
+// ---- "Staff only" questions ----------------------------------------------
+/** Ids of the components that are staff only in effect: the flagged ones,
+ *  every member of a repeat group that has a flagged member (a group's rows
+ *  are one answer) and a calculated total that adds up a staff-only question. */
+function staffOnlyComponentIds(components: FormComponent[]): Set<string> {
+  const ids = new Set<string>();
+  if (!components.some((component) => component.staffOnly === true)) {
+    return ids;
+  }
+  const groupKeys = new Set<string>();
+  components.forEach((component) => {
+    if (component.staffOnly === true) {
+      ids.add(component.id);
+      if (component.repeatGroup?.key) {
+        groupKeys.add(component.repeatGroup.key);
+      }
+    }
+  });
+  const answerKeys = new Set<string>();
+  components.forEach((component) => {
+    if (component.repeatGroup?.key) {
+      if (groupKeys.has(component.repeatGroup.key)) {
+        ids.add(component.id);
+      }
+      return;
+    }
+    if (ids.has(component.id)) {
+      answerKeys.add(component.key);
+    }
+  });
+  components.forEach((component) => {
+    if (
+      component.type === "total" &&
+      !ids.has(component.id) &&
+      resolveCalculatedSourceKeys(component, components).some((key) =>
+        answerKeys.has(key)
+      )
+    ) {
+      ids.add(component.id);
+    }
+  });
+  return ids;
+}
+/** What a client audience sees: the staff-only components taken out. The same
+ *  array when there are none. Pass `hiddenIds` when already worked out. */
+function withoutStaffOnlyComponents(
+  components: FormComponent[],
+  hiddenIds: Set<string> = staffOnlyComponentIds(components)
+): FormComponent[] {
+  return hiddenIds.size
+    ? components.filter((component) => !hiddenIds.has(component.id))
+    : components;
+}
+/** Writes the effective flag on every staff-only component, so the stored
+ *  definition says the same thing to the server as to the viewer. Returns the
+ *  same array when nothing changes (definitions without the flag stay
+ *  byte-for-byte what they were). */
+function applyStaffOnlyFlags(components: FormComponent[]): FormComponent[] {
+  const ids = staffOnlyComponentIds(components);
+  if (!ids.size) {
+    return components;
+  }
+  let changed = false;
+  const next = components.map((component) => {
+    if (ids.has(component.id) && component.staffOnly !== true) {
+      changed = true;
+      return { ...component, staffOnly: true };
+    }
+    return component;
+  });
+  return changed ? next : components;
+}
+/** Top-level answer keys that hold staff-only answers (a repeat group's key
+ *  for its members). */
+function staffOnlyAnswerKeys(components: FormComponent[]): string[] {
+  const ids = staffOnlyComponentIds(components);
+  const keys = new Set<string>();
+  components.forEach((component) => {
+    if (ids.has(component.id)) {
+      keys.add(component.repeatGroup?.key || component.key);
+    }
+  });
+  return Array.from(keys);
+}
+function pickAnswers(data: JsonObject, keys: string[]): JsonObject {
+  const picked: JsonObject = {};
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return picked;
+  }
+  keys.forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(data, key)) {
+      picked[key] = data[key];
+    }
+  });
+  return picked;
+}
+/** Client audience: the answers written back are the client's answers plus the
+ *  stored staff-only answers, exactly as they arrived. */
+function withProtectedAnswers(
+  data: JsonObject,
+  hiddenKeys: string[],
+  protectedAnswers: JsonObject
+): JsonObject {
+  return hiddenKeys.length ? { ...data, ...protectedAnswers } : data;
+}
 // Redesign step 4: flat fields manifest, written alongside the component tree
 // on every save. Server-side consumers (TemplateField snapshot, publish
 // validation) can read this simple array instead of parsing the nested
@@ -6176,6 +6345,7 @@ interface FieldManifestEntry {
   type: string;
   label: string;
   required: boolean;
+  staffOnly?: boolean;
   options?: string[];
   tokenKey?: string;
   prefillTokenKey?: string;
@@ -6194,6 +6364,9 @@ function buildFieldsManifest(definition: FormDefinition): FieldManifestEntry[] {
         label: component.label == null ? "" : String(component.label),
         required: component.required === true
       };
+      if (component.staffOnly === true) {
+        entry.staffOnly = true;
+      }
       if (Array.isArray(component.options) && component.options.length) {
         entry.options = component.options.map((option) => String(option));
       }
@@ -6272,7 +6445,8 @@ function ensureSectionIds(definition: FormDefinition): FormDefinition {
 function serializeDefinitionWithManifest(definition: FormDefinition): string {
   // matrixRowKeysFlat is derived, not edited: recompute from the current rows
   // on every save so the server-side snapshot never sees a stale row list.
-  const components = definition.components.map((component) => {
+  const flaggedComponents = applyStaffOnlyFlags(definition.components);
+  const components = flaggedComponents.map((component) => {
     if (component.type !== "matrix") {
       return component;
     }
@@ -6302,7 +6476,11 @@ function serializeDefinitionWithManifest(definition: FormDefinition): string {
       ...definition,
       components,
       fieldsManifestVersion: FIELDS_MANIFEST_VERSION,
-      fieldsManifest: buildFieldsManifest(definition)
+      fieldsManifest: buildFieldsManifest(
+        flaggedComponents === definition.components
+          ? definition
+          : { ...definition, components: flaggedComponents }
+      )
     },
     null,
     2
@@ -6749,6 +6927,114 @@ function assertAnswersShape(data: JsonObject): JsonObject {
     }
   });
   return data;
+}
+/** Token values for content blocks; nothing is worked out for a form without one. */
+function buildContentBlockTokens(
+  definition: FormDefinition,
+  data: JsonObject,
+  tokenContext: Record<string, string>
+): Record<string, string> {
+  if (
+    !definition.components.some((component) => component.type === "contentBlock")
+  ) {
+    return {};
+  }
+  return buildTokenScope(definition, data, tokenContext);
+}
+const NO_SECTION_STATS: ReturnType<typeof buildSectionStats> = Object.freeze({});
+/** The counts the section headers and the wizard read, per section key. */
+function buildSectionStats(
+  summaries: Array<{
+    key: string;
+    requiredCount: number;
+    requiredCompleteCount: number;
+    prefilledCount: number;
+    trackableCount: number;
+    completedCount: number;
+  }>
+): Record<
+  string,
+  {
+    reqTotal: number;
+    reqDone: number;
+    prefilled: number;
+    fields: number;
+    completed: number;
+  }
+> {
+  const map: Record<
+    string,
+    {
+      reqTotal: number;
+      reqDone: number;
+      prefilled: number;
+      fields: number;
+      completed: number;
+    }
+  > = {};
+  summaries.forEach((section) => {
+    map[section.key] = {
+      reqTotal: section.requiredCount,
+      reqDone: section.requiredCompleteCount,
+      prefilled: section.prefilledCount,
+      fields: section.trackableCount,
+      completed: section.completedCount
+    };
+  });
+  return map;
+}
+/**
+ * The one place answers from the fill form are normalised, for the real form
+ * and for the designer's Preview: section-switch carry-over, sanitize (which
+ * works out calculated totals) and, when `lockedStaffKeys` is given, the
+ * staff-only lock. Pure: no state, nothing is persisted here.
+ */
+function normalizeAnswerData(
+  nextData: JsonObject,
+  currentData: JsonObject,
+  definition: FormDefinition,
+  lockedStaffKeys: string[] | null
+): { data: JsonObject; unchanged: boolean } {
+  const currentSectionVisibility = parseSectionVisibilityMap(
+    currentData[SECTION_VISIBILITY_DATA_KEY]
+  );
+  const nextDataWithSectionVisibility: JsonObject = { ...nextData };
+  if (
+    !Object.prototype.hasOwnProperty.call(
+      nextDataWithSectionVisibility,
+      SECTION_VISIBILITY_DATA_KEY
+    ) &&
+    Object.keys(currentSectionVisibility).length
+  ) {
+    nextDataWithSectionVisibility[SECTION_VISIBILITY_DATA_KEY] =
+      currentSectionVisibility;
+  }
+  const sanitizedNext = sanitizeFormData(
+    nextDataWithSectionVisibility,
+    definition
+  );
+  const sanitizedCurrent = sanitizeFormData(currentData, definition);
+  const currentJson = JSON.stringify(sanitizedCurrent);
+  if (lockedStaffKeys) {
+    // Only the staff-only answers may change; the rest stays as stored.
+    const merged: JsonObject = { ...sanitizedCurrent };
+    lockedStaffKeys.forEach((key) => {
+      if (Object.prototype.hasOwnProperty.call(sanitizedNext, key)) {
+        merged[key] = sanitizedNext[key];
+      } else {
+        delete merged[key];
+      }
+    });
+    const lockedNext = sanitizeFormData(merged, definition);
+    return {
+      data: lockedNext,
+      unchanged: JSON.stringify(lockedNext) === currentJson
+    };
+  }
+  return {
+    data: sanitizedNext,
+    unchanged: JSON.stringify(sanitizedNext) === currentJson
+  };
 }
 function buildFieldSchema(component: FormComponent): JsonObject {
   const title = component.label || component.key;
@@ -7252,8 +7538,25 @@ function buildRepeatGroupLayoutGrid(components: FormComponent[]): JsonObject {
     "ui:row": { className: "row rjsf-builder__datagrid-row", children }
   };
 }
-function buildUiSchema(definition: FormDefinition): JsonObject {
+function buildUiSchema(
+  definition: FormDefinition,
+  lockNonStaffOnly = false
+): JsonObject {
   const uiSchema: JsonObject = {};
+  // lockClientAnswers: every question that is not staff only gets the locked
+  // class (the viewer makes those fields inert).
+  let lockedIds: Set<string> | null = null;
+  if (lockNonStaffOnly) {
+    const staffIds = staffOnlyComponentIds(definition.components);
+    lockedIds = new Set(
+      definition.components
+        .filter(
+          (component) =>
+            !staffIds.has(component.id) && component.type !== "contentBlock"
+        )
+        .map((component) => component.id)
+    );
+  }
   const groupedComponents: Record<
     string,
     { config: RepeatGroupConfig; components: FormComponent[] }
@@ -7388,7 +7691,7 @@ function buildUiSchema(definition: FormDefinition): JsonObject {
             : undefined
       };
       fieldUi.items = itemsUi;
-      const fieldClassNames = buildFieldClassNames(component);
+      const fieldClassNames = buildFieldClassNames(component, lockedIds);
       if (fieldClassNames) {
         fieldUi["ui:classNames"] = fieldClassNames;
       }
@@ -7470,7 +7773,7 @@ function buildUiSchema(definition: FormDefinition): JsonObject {
         blockStyle: component.blockStyle || ""
       };
     }
-    const fieldClassNames = buildFieldClassNames(component);
+    const fieldClassNames = buildFieldClassNames(component, lockedIds);
     if (fieldClassNames) {
       fieldUi["ui:classNames"] = fieldClassNames;
     }
@@ -7570,7 +7873,7 @@ function buildUiSchema(definition: FormDefinition): JsonObject {
       if (component.type === "signature") {
         fieldUi["ui:widget"] = "signatureCanvas";
       }
-      const fieldClassNames = buildFieldClassNames(component);
+      const fieldClassNames = buildFieldClassNames(component, lockedIds);
       if (fieldClassNames) {
         fieldUi["ui:classNames"] = fieldClassNames;
       }
@@ -9438,6 +9741,12 @@ function ObjectTemplate(props: any): ReactElement {
     onActiveSectionChange?: (sectionKey: string) => void;
     /** Designer canvas only: powers the selected-field action toolbar. */
     onPreviewFieldAction?: (action: "duplicate" | "copy" | "delete") => void;
+    /** Designer canvas only (0.12.0): per-field problems, rule sentence and
+     *  "controls N fields" (keyed by component key), and which fields are the
+     *  sources / dependants of the selected field. */
+    designerInsightsByKey?: Record<string, DesignerFieldInsight>;
+    designerShowProblems?: boolean;
+    designerRelationByKey?: Record<string, "source" | "dependant">;
     wizard?: {
       enabled: boolean;
       activeKey: string | null;
@@ -9548,6 +9857,11 @@ function ObjectTemplate(props: any): ReactElement {
     [formContext.previewDataGridKeys]
   );
   const selectedPreviewKey = clean(formContext.selectedPreviewKey);
+  const designerInsightsByKey =
+    formContext.designerInsightsByKey || NO_DESIGNER_INSIGHTS;
+  const designerShowProblems = Boolean(formContext.designerShowProblems);
+  const designerRelationByKey =
+    formContext.designerRelationByKey || NO_DESIGNER_RELATIONS;
   const previewBadgeMetaByKey = (formContext.componentMetaByKey || {}) as Record<
     string,
     { hasVisibilityRules?: boolean; sharedFieldRef?: string }
@@ -9565,7 +9879,12 @@ function ObjectTemplate(props: any): ReactElement {
   const [insertAfterKey, setInsertAfterKey] = useState<string | null>(null);
   const [insertSearch, setInsertSearch] = useState("");
   const [dragOverSlot, setDragOverSlot] = useState<string | null>(null);
-  const [resizingKey, setResizingKey] = useState<string | null>(null);
+  // While an edge drag is in flight the new width is only shown (local state);
+  // the definition changes once, on release, so a drag is one undo step.
+  const [resizeDraft, setResizeDraft] = useState<{
+    key: string;
+    span: number;
+  } | null>(null);
   const [sectionResizingKey, setSectionResizingKey] = useState<string | null>(
     null
   );
@@ -10029,22 +10348,60 @@ function ObjectTemplate(props: any): ReactElement {
       const pointerId = event.pointerId;
       const startX = event.clientX;
       const pxPerColumn = gridRect.width / 12;
-      setResizingKey(itemKey);
+      const colLeft =
+        (
+          handle.closest(".rjsf-builder__col") as HTMLElement | null
+        )?.getBoundingClientRect().left ?? gridRect.left;
+      // The stop a field already sits on (or nearest to): dragging back onto
+      // it leaves an in-between width such as 3/12 or 8/12 untouched.
+      const startStop = snapColumnSpan(startSpan, true, DESIGNER_WIDTH_STOPS);
+      let draftSpan = startSpan;
+      let moved = false;
       handle.setPointerCapture(pointerId);
       const onPointerMove = (moveEvent: PointerEvent): void => {
-        const deltaColumns = Math.round(
-          (moveEvent.clientX - startX) / pxPerColumn
+        // A press with a little wobble is a click, not a drag.
+        if (
+          !moved &&
+          Math.abs(moveEvent.clientX - startX) < RESIZE_DRAG_THRESHOLD_PX
+        ) {
+          return;
+        }
+        moved = true;
+        let nextSpan: number;
+        if (snapToResize) {
+          // Nearest of third / half / full to the pointer's column; ceil
+          // puts the switch points at 5 and 9 columns (0.42 / 0.75 of the row).
+          const stop = snapColumnSpan(
+            Math.ceil((moveEvent.clientX - colLeft) / pxPerColumn),
+            true,
+            DESIGNER_WIDTH_STOPS
+          );
+          nextSpan = stop === startStop ? startSpan : stop;
+        } else {
+          nextSpan = snapColumnSpan(
+            startSpan + Math.round((moveEvent.clientX - startX) / pxPerColumn),
+            false
+          );
+        }
+        draftSpan = nextSpan;
+        setResizeDraft((current) =>
+          current && current.span === draftSpan
+            ? current
+            : { key: itemKey, span: draftSpan }
         );
-        const rawSpan = clamp(startSpan + deltaColumns, 1, 12);
-        onPreviewResize(itemKey, snapColumnSpan(rawSpan, snapToResize));
       };
-      const onPointerDone = (): void => {
-        setResizingKey((current) => (current === itemKey ? null : current));
+      const onPointerDone = (doneEvent: Event): void => {
+        setResizeDraft(null);
         window.removeEventListener("pointermove", onPointerMove);
         window.removeEventListener("pointerup", onPointerDone);
         window.removeEventListener("pointercancel", onPointerDone);
         if (handle.hasPointerCapture(pointerId)) {
           handle.releasePointerCapture(pointerId);
+        }
+        // One definition change per drag (one undo step); a click on the
+        // handle, or a cancelled drag, changes nothing.
+        if (doneEvent.type === "pointerup" && moved && draftSpan !== startSpan) {
+          onPreviewResize(itemKey, draftSpan);
         }
       };
       window.addEventListener("pointermove", onPointerMove);
@@ -10052,6 +10409,31 @@ function ObjectTemplate(props: any): ReactElement {
       window.addEventListener("pointercancel", onPointerDone);
     },
     [onPreviewResize, snapToResize]
+  );
+  /** Arrow keys on the edge handle step third / half / full. */
+  const handleResizeKeyDown = useCallback(
+    (
+      event: ReactKeyboardEvent<HTMLDivElement>,
+      itemKey: string,
+      currentSpan: number
+    ) => {
+      if (!onPreviewResize) {
+        return;
+      }
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      const nextSpan =
+        event.key === "ArrowRight"
+          ? DESIGNER_WIDTH_STOPS.find((stop) => stop > currentSpan)
+          : [...DESIGNER_WIDTH_STOPS].reverse().find((stop) => stop < currentSpan);
+      if (nextSpan !== undefined) {
+        onPreviewResize(itemKey, nextSpan);
+      }
+    },
+    [onPreviewResize]
   );
   const handleSectionResizePointerDown = useCallback(
     (
@@ -10122,17 +10504,47 @@ function ObjectTemplate(props: any): ReactElement {
       const handleSelect = onPreviewSelectKey
         ? () => onPreviewSelectKey(itemKey)
         : undefined;
+      const draftSpan =
+        resizeDraft && resizeDraft.key === itemKey ? resizeDraft.span : null;
+      const shownSpan = draftSpan ?? itemSpan;
       const spanStyle = {
-        gridColumn: `span ${forceFullWidth ? 12 : itemSpan}`
+        gridColumn: `span ${forceFullWidth ? 12 : shownSpan}`
       };
+      // Designer canvas only: problems, rule sentence, source/dependant marks.
+      const insight = reorderEnabled
+        ? designerInsightsByKey[itemKey]
+        : undefined;
+      const insightProblems =
+        designerShowProblems && insight ? insight.problems : [];
+      const relation = reorderEnabled
+        ? designerRelationByKey[itemKey]
+        : undefined;
+      const hasInsightChips = Boolean(
+        insight && (insight.ruleSentence || insight.controls > 0)
+      );
+      // The designer canvas shows a rule once: the sentence chip replaces
+      // the eye badge.
+      const showEyeBadge = Boolean(
+        previewBadgeMetaByKey[itemKey]?.hasVisibilityRules &&
+          !insight?.ruleSentence
+      );
       return (
         <div
           key={`${itemKey || item.name}_wrap`}
           className={`rjsf-builder__col${
             isReorderable ? " rjsf-builder__col--draggable" : ""
           }${dragOverKey === itemKey ? " rjsf-builder__col--drag-over" : ""}${
-            resizingKey === itemKey ? " rjsf-builder__col--resizing" : ""
-          }${isSelected ? " rjsf-builder__col--selected" : ""}`}
+            draftSpan !== null ? " rjsf-builder__col--resizing" : ""
+          }${isSelected ? " rjsf-builder__col--selected" : ""}${
+            insightProblems.length ? " rjsf-builder__col--problem" : ""
+          }${
+            relation ? ` rjsf-builder__col--${relation}` : ""
+          }`}
+          data-fs-key={reorderEnabled ? itemKey : undefined}
+          data-fs-relation={relation}
+          data-fs-problem-count={
+            insightProblems.length ? insightProblems.length : undefined
+          }
           style={spanStyle}
           onMouseDownCapture={handleSelect}
           onFocusCapture={handleSelect}
@@ -10286,12 +10698,11 @@ function ObjectTemplate(props: any): ReactElement {
               </button>{" "}
             </div>
           ) : null}{" "}
-          {reorderEnabled &&
-          (previewBadgeMetaByKey[itemKey]?.hasVisibilityRules ||
+          {reorderEnabled && (showEyeBadge ||
             previewBadgeMetaByKey[itemKey]?.sharedFieldRef) ? (
             <div className="rjsf-builder__field-badges">
               {" "}
-              {previewBadgeMetaByKey[itemKey]?.hasVisibilityRules ? (
+              {showEyeBadge ? (
                 <span
                   className="rjsf-builder__field-badge rjsf-builder__field-badge--visibility"
                   title="Conditional visibility rules apply to this field"
@@ -10329,17 +10740,89 @@ function ObjectTemplate(props: any): ReactElement {
           {isResizable ? (
             <div
               className="rjsf-builder__resize-handle"
+              role="slider"
+              tabIndex={0}
+              draggable={false}
+              data-fs-resize-handle={itemKey}
+              aria-label={`Width of ${itemKey}`}
+              aria-orientation="horizontal"
+              aria-valuemin={0}
+              aria-valuemax={DESIGNER_WIDTH_STOPS.length - 1}
+              aria-valuenow={DESIGNER_WIDTH_STOPS.indexOf(
+                snapColumnSpan(shownSpan, true, DESIGNER_WIDTH_STOPS)
+              )}
+              aria-valuetext={`${designerWidthName(shownSpan)} (${shownSpan} of 12 columns)`}
               title={
                 snapToResize
-                  ? "Drag to resize (snap enabled)."
-                  : "Drag to resize."
+                  ? "Drag the edge to resize: third, half or full. Arrow keys work too."
+                  : "Drag the edge to resize. Arrow keys step third, half, full."
               }
+              onDragStart={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+              }}
+              onClick={(event) => event.stopPropagation()}
               onPointerDown={(event) =>
                 handleResizePointerDown(event, itemKey, itemSpan)
               }
+              onKeyDown={(event) =>
+                handleResizeKeyDown(event, itemKey, itemSpan)
+              }
             />
           ) : null}{" "}
+          {draftSpan !== null ? (
+            <div
+              className="rjsf-builder__resize-badge"
+              data-fs-resize-badge=""
+              aria-hidden="true"
+            >
+              {designerWidthName(draftSpan)}
+            </div>
+          ) : null}{" "}
           {item.content}{" "}
+          {hasInsightChips || relation ? (
+            <div className="rjsf-builder__rule-chips" data-fs-rule-chips="">
+              {insight?.ruleSentence ? (
+                <span
+                  className="rjsf-builder__rule-chip rjsf-builder__rule-chip--rule"
+                  data-fs-rule-chip=""
+                >
+                  {insight.ruleSentence}
+                </span>
+              ) : null}
+              {insight && insight.controls > 0 ? (
+                <span
+                  className="rjsf-builder__rule-chip rjsf-builder__rule-chip--controls"
+                  data-fs-controls-chip=""
+                >
+                  {`Controls ${insight.controls} field${
+                    insight.controls === 1 ? "" : "s"
+                  }`}
+                </span>
+              ) : null}
+              {relation ? (
+                <span
+                  className={`rjsf-builder__rule-chip rjsf-builder__rule-chip--${relation}`}
+                  data-fs-relation-chip={relation}
+                >
+                  {DESIGNER_RELATION_LABELS[relation]}
+                </span>
+              ) : null}
+            </div>
+          ) : null}{" "}
+          {insightProblems.length ? (
+            <div className="rjsf-builder__field-problems">
+              {insightProblems.map((text, index) => (
+                <div
+                  key={`${index}-${text}`}
+                  className="rjsf-builder__field-problem"
+                  data-fs-problem=""
+                >
+                  {text}
+                </div>
+              ))}
+            </div>
+          ) : null}{" "}
           {reorderEnabled && onPreviewDropField ? (
             <div
               className={`rjsf-builder__insert${
@@ -10418,6 +10901,11 @@ function ObjectTemplate(props: any): ReactElement {
       dragOverSlot,
       handleDropOnTarget,
       handleResizePointerDown,
+      handleResizeKeyDown,
+      resizeDraft,
+      designerInsightsByKey,
+      designerShowProblems,
+      designerRelationByKey,
       insertAfterKey,
       insertSearch,
       onPreviewDropField,
@@ -10428,7 +10916,6 @@ function ObjectTemplate(props: any): ReactElement {
       reorderEnabled,
       reorderableKeys,
       resizeEnabled,
-      resizingKey,
       selectedPreviewKey,
       snapToResize
     ]
@@ -11235,7 +11722,80 @@ function editorHtmlToTemplateValue(html: string): string {
     .replace(/&nbsp;/gi, " ")
     .replace(/&#160;/gi, " ")
     .replace(/<[^>]+>/g, "");
+  // An image, table or page break is content even with no text around it.
+  if (/<img\b|<table\b|fs-page-break/i.test(html)) {
+    return html;
+  }
   return textOnly.trim() ? html : "";
+}
+const RICH_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+const RICH_IMAGE_MAX_WIDTH = 1200;
+const RICH_IMAGE_KEEP_BYTES = 200 * 1024;
+const RICH_IMAGE_WIDTHS: Array<{ value: string; label: string }> = [
+  { value: "25", label: "Small" },
+  { value: "40", label: "Medium" },
+  { value: "60", label: "Large" },
+  { value: "100", label: "Full" }
+];
+const RICH_IMAGE_ALIGNS: Array<{ value: string; label: string }> = [
+  { value: "left", label: "Left" },
+  { value: "center", label: "Center" },
+  { value: "right", label: "Right" }
+];
+/** Reads a picked image as a data URL. The image is stored inside the form
+ *  definition, so anything large is scaled to 1200px wide and re-encoded. */
+function readImageFileForTemplate(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (!RICH_IMAGE_TYPES.includes(file.type)) {
+      reject(new Error("Use a PNG, JPG, GIF or WebP image."));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("The image could not be read."));
+    reader.onload = () => {
+      const original = String(reader.result || "");
+      const image = new Image();
+      image.onerror = () => reject(new Error("The image could not be read."));
+      image.onload = () => {
+        if (
+          file.size <= RICH_IMAGE_KEEP_BYTES &&
+          image.naturalWidth <= RICH_IMAGE_MAX_WIDTH
+        ) {
+          resolve(original);
+          return;
+        }
+        const scale = Math.min(1, RICH_IMAGE_MAX_WIDTH / image.naturalWidth);
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+        const context = canvas.getContext("2d");
+        if (!context) {
+          resolve(original);
+          return;
+        }
+        context.fillStyle = "#ffffff";
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/jpeg", 0.85));
+      };
+      image.src = original;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+/** Swaps the one class of a family (fs-img--w40 -> fs-img--w60). Classes, not
+ *  inline styles: a strict Content-Security-Policy drops style attributes. */
+function setRichClassVariant(
+  element: Element,
+  prefix: string,
+  value: string | null
+): void {
+  Array.from(element.classList)
+    .filter((name) => name.startsWith(prefix))
+    .forEach((name) => element.classList.remove(name));
+  if (value) {
+    element.classList.add(`${prefix}${value}`);
+  }
 }
 const RICH_TEMPLATE_TOOLS: Array<{
   command: string;
@@ -11426,6 +11986,150 @@ const RichTemplateEditor = forwardRef<
     }),
     [exec]
   );
+  // Image and table tools. The image or table the caret is in gets its own
+  // row of actions under the toolbar.
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [activeImage, setActiveImage] = useState<HTMLImageElement | null>(null);
+  const [activeTable, setActiveTable] = useState<HTMLTableElement | null>(null);
+  const [activeCell, setActiveCell] = useState<HTMLTableCellElement | null>(
+    null
+  );
+  const [insertNotice, setInsertNotice] = useState("");
+  const refreshContext = useCallback((clicked?: EventTarget | null) => {
+    const editor = editorRef.current;
+    if (!editor) {
+      return;
+    }
+    const image =
+      clicked instanceof HTMLImageElement && editor.contains(clicked)
+        ? clicked
+        : null;
+    const selection = window.getSelection();
+    const anchor =
+      selection && selection.rangeCount > 0 ? selection.anchorNode : null;
+    const anchorElement =
+      anchor instanceof Element ? anchor : anchor?.parentElement || null;
+    const cell =
+      anchorElement && editor.contains(anchorElement)
+        ? (anchorElement.closest("td,th") as HTMLTableCellElement | null)
+        : null;
+    setActiveImage(image);
+    setActiveCell(image ? null : cell);
+    setActiveTable(
+      image ? null : ((cell?.closest("table") as HTMLTableElement | null) ?? null)
+    );
+  }, []);
+  const [, setContextTick] = useState(0);
+  const mutated = useCallback(() => {
+    saveSelection();
+    emit();
+    // the pressed state of the option buttons reads the element's classes
+    setContextTick((tick) => tick + 1);
+  }, [emit, saveSelection]);
+  const insertImageFile = useCallback(
+    (file: File | undefined) => {
+      if (!file) {
+        return;
+      }
+      setInsertNotice("");
+      readImageFileForTemplate(file)
+        .then((dataUrl) => {
+          exec(
+            "insertHTML",
+            `<img class="fs-img fs-img--w40 fs-img--left" alt="" src="${dataUrl}">`
+          );
+        })
+        .catch((error: unknown) => {
+          setInsertNotice(
+            error instanceof Error ? error.message : "The image was not added."
+          );
+        });
+    },
+    [exec]
+  );
+  const insertTable = useCallback(() => {
+    const row = "<tr><td><br></td><td><br></td><td><br></td></tr>";
+    exec(
+      "insertHTML",
+      `<table class="fs-table"><tbody>${row}${row}</tbody></table><p><br></p>`
+    );
+  }, [exec]);
+  const insertPageBreak = useCallback(() => {
+    exec(
+      "insertHTML",
+      '<div class="fs-page-break" contenteditable="false"></div><p><br></p>'
+    );
+  }, [exec]);
+  const tableAction = useCallback(
+    (action: "addRow" | "addColumn" | "removeRow" | "removeColumn" | "borders" | "remove") => {
+      const table = activeTable;
+      if (!table) {
+        return;
+      }
+      const rows = Array.from(table.rows);
+      const rowIndex = activeCell
+        ? (activeCell.parentElement as HTMLTableRowElement).rowIndex
+        : rows.length - 1;
+      const cellIndex = activeCell ? activeCell.cellIndex : -1;
+      if (action === "addRow") {
+        const columnCount = rows[0]?.cells.length || 1;
+        const next = table.insertRow(rowIndex + 1);
+        for (let index = 0; index < columnCount; index += 1) {
+          next.insertCell().innerHTML = "<br>";
+        }
+      } else if (action === "addColumn") {
+        rows.forEach((row) => {
+          row.insertCell(cellIndex < 0 ? -1 : cellIndex + 1).innerHTML = "<br>";
+        });
+      } else if (action === "removeRow") {
+        if (rows.length <= 1) {
+          table.remove();
+        } else {
+          table.deleteRow(rowIndex);
+        }
+      } else if (action === "removeColumn") {
+        if ((rows[0]?.cells.length || 0) <= 1) {
+          table.remove();
+        } else {
+          rows.forEach((row) => {
+            const target = cellIndex < 0 ? row.cells.length - 1 : cellIndex;
+            if (target < row.cells.length) {
+              row.deleteCell(target);
+            }
+          });
+        }
+      } else if (action === "borders") {
+        table.classList.toggle("fs-table--plain");
+      } else {
+        table.remove();
+      }
+      setActiveTable(null);
+      setActiveCell(null);
+      mutated();
+    },
+    [activeCell, activeTable, mutated]
+  );
+  const keepSelection = (event: { preventDefault: () => void }): void => {
+    // keep the editor selection alive while clicking the toolbar
+    event.preventDefault();
+  };
+  const contextButton = (
+    key: string,
+    label: string,
+    onClick: () => void,
+    pressed?: boolean
+  ): ReactElement => (
+    <button
+      key={key}
+      type="button"
+      className={`rjsf-builder__rich-tool${pressed ? " is-active" : ""}`}
+      aria-pressed={pressed}
+      onMouseDown={keepSelection}
+      onClick={onClick}
+    >
+      {label}
+    </button>
+  );
   return (
     <div className="rjsf-builder__rich-editor">
       <div
@@ -11442,16 +12146,124 @@ const RichTemplateEditor = forwardRef<
             }`}
             title={tool.title}
             aria-label={tool.title}
-            onMouseDown={(event) => {
-              // keep the editor selection alive while clicking the toolbar
-              event.preventDefault();
-            }}
+            onMouseDown={keepSelection}
             onClick={() => exec(tool.command, tool.arg)}
           >
             {tool.label}
           </button>
         ))}
+        <button
+          type="button"
+          className="rjsf-builder__rich-tool"
+          title="Insert an image (PNG, JPG, GIF or WebP)"
+          onMouseDown={keepSelection}
+          onClick={() => fileInputRef.current?.click()}
+        >
+          Image
+        </button>
+        <button
+          type="button"
+          className="rjsf-builder__rich-tool"
+          title="Insert a table"
+          onMouseDown={keepSelection}
+          onClick={insertTable}
+        >
+          Table
+        </button>
+        <button
+          type="button"
+          className="rjsf-builder__rich-tool"
+          title="Start a new page here in the PDF"
+          onMouseDown={keepSelection}
+          onClick={insertPageBreak}
+        >
+          Page break
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept={RICH_IMAGE_TYPES.join(",")}
+          className="rjsf-builder__rich-file"
+          hidden
+          tabIndex={-1}
+          aria-hidden="true"
+          onChange={(event) => {
+            insertImageFile(event.target.files?.[0]);
+            event.target.value = "";
+          }}
+        />
       </div>
+      {activeImage ? (
+        <div
+          className="rjsf-builder__rich-toolbar rjsf-builder__rich-toolbar--context"
+          role="toolbar"
+          aria-label="Image options"
+        >
+          <span className="rjsf-builder__rich-context-label">Image</span>
+          {RICH_IMAGE_WIDTHS.map((width) =>
+            contextButton(
+              `w${width.value}`,
+              width.label,
+              () => {
+                setRichClassVariant(activeImage, "fs-img--w", width.value);
+                mutated();
+                setActiveImage(activeImage);
+                setInsertNotice("");
+              },
+              activeImage.classList.contains(`fs-img--w${width.value}`)
+            )
+          )}
+          {RICH_IMAGE_ALIGNS.map((align) =>
+            contextButton(
+              `a${align.value}`,
+              align.label,
+              () => {
+                ["left", "center", "right"].forEach((name) =>
+                  activeImage.classList.remove(`fs-img--${name}`)
+                );
+                activeImage.classList.add(`fs-img--${align.value}`);
+                mutated();
+                setInsertNotice("");
+              },
+              activeImage.classList.contains(`fs-img--${align.value}`)
+            )
+          )}
+          {contextButton("remove", "Remove", () => {
+            activeImage.remove();
+            setActiveImage(null);
+            mutated();
+          })}
+        </div>
+      ) : null}
+      {activeTable ? (
+        <div
+          className="rjsf-builder__rich-toolbar rjsf-builder__rich-toolbar--context"
+          role="toolbar"
+          aria-label="Table options"
+        >
+          <span className="rjsf-builder__rich-context-label">Table</span>
+          {contextButton("addRow", "+ Row", () => tableAction("addRow"))}
+          {contextButton("addColumn", "+ Column", () =>
+            tableAction("addColumn")
+          )}
+          {contextButton("removeRow", "− Row", () => tableAction("removeRow"))}
+          {contextButton("removeColumn", "− Column", () =>
+            tableAction("removeColumn")
+          )}
+          {contextButton(
+            "borders",
+            "Borders",
+            () => tableAction("borders"),
+            !activeTable.classList.contains("fs-table--plain")
+          )}
+          {contextButton("remove", "Remove table", () => tableAction("remove"))}
+        </div>
+      ) : null}
+      {insertNotice ? (
+        <div className="rjsf-builder__help" role="alert">
+          {insertNotice}
+        </div>
+      ) : null}
       <div
         ref={editorRef}
         className="rjsf-builder__rich-surface rjsf-builder__template-editor"
@@ -11466,8 +12278,14 @@ const RichTemplateEditor = forwardRef<
           saveSelection();
           emit();
         }}
-        onKeyUp={saveSelection}
-        onMouseUp={saveSelection}
+        onKeyUp={() => {
+          saveSelection();
+          refreshContext(null);
+        }}
+        onMouseUp={(event) => {
+          saveSelection();
+          refreshContext(event.target);
+        }}
       />
     </div>
   );
@@ -12282,6 +13100,342 @@ function FsPageRail({ instanceId }: { instanceId: string }): ReactElement | null
   );
 }
 
+// ---- Designer helpers (0.12.0): Check, rules in plain words, preview -------
+// All of this is view state computed from the definition. Nothing here is
+// persisted, and none of it renders outside the designer.
+interface DesignerProblem {
+  componentId: string;
+  key: string;
+  label: string;
+  kind: "duplicateKey" | "noOptions" | "missingRuleSource" | "unknownToken";
+  text: string;
+}
+/** What the designer canvas shows on one field (keyed by component key). */
+interface DesignerFieldInsight {
+  problems: string[];
+  /** "Shown when ..." sentence for the field's visibility rules. */
+  ruleSentence?: string;
+  /** How many other fields have a rule that reads this field. */
+  controls: number;
+}
+interface DesignerLogicEntry {
+  componentId: string;
+  key: string;
+  label: string;
+  /** One line per rule. */
+  lines: Array<{ joiner: string; text: string; missing: boolean }>;
+}
+interface DesignerInsights {
+  problems: DesignerProblem[];
+  insightsByKey: Record<string, DesignerFieldInsight>;
+  logic: DesignerLogicEntry[];
+  /** Per field key: the fields whose visibility rules read it. */
+  dependantsByKey: Record<string, Array<{ id: string; key: string }>>;
+}
+const NO_DESIGNER_INSIGHT_SET: DesignerInsights = Object.freeze({
+  problems: [],
+  insightsByKey: {},
+  logic: [],
+  dependantsByKey: {}
+});
+/** Dotted tokens only: `{client.full_name}`, not a form field's `{key}`. */
+const DESIGNER_DOTTED_TOKEN = /^[A-Za-z_][\w-]*(?:\.[\w-]+)+$/;
+/** The tokens the token check knows, built once per catalog. */
+interface DesignerKnownTokens {
+  list: string[];
+  lower: Set<string>;
+  /** "Did you mean" per unknown token (lower case), found once. */
+  suggestions: Map<string, string | undefined>;
+}
+function designerLevenshtein(a: string, b: string): number {
+  const rows = a.length + 1;
+  const cols = b.length + 1;
+  let previous = Array.from({ length: cols }, (_, index) => index);
+  for (let i = 1; i < rows; i += 1) {
+    const current = [i];
+    for (let j = 1; j < cols; j += 1) {
+      current[j] = Math.min(
+        previous[j] + 1,
+        current[j - 1] + 1,
+        previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+    }
+    previous = current;
+  }
+  return previous[cols - 1];
+}
+/** A close token from the known list ("client.fullname" -> "client.full_name"). */
+function suggestDesignerToken(
+  unknown: string,
+  known: string[]
+): string | undefined {
+  const squash = (value: string): string =>
+    value.toLowerCase().replace(/[_\-\s]/g, "");
+  const target = squash(unknown);
+  let best: string | undefined;
+  let bestDistance = Infinity;
+  known.forEach((candidate) => {
+    const candidateSquashed = squash(candidate);
+    const distance =
+      candidateSquashed === target
+        ? 0
+        : designerLevenshtein(candidateSquashed, target);
+    const allowed = Math.max(1, Math.floor(target.length / 6));
+    if (distance <= allowed && distance < bestDistance) {
+      best = candidate;
+      bestDistance = distance;
+    }
+  });
+  return best;
+}
+function designerTokenSources(component: FormComponent): string[] {
+  const texts: unknown[] = [
+    component.label,
+    component.description,
+    component.placeholder,
+    component.contentText,
+    component.documentOutputTemplate,
+    typeof component.defaultValue === "string" ? component.defaultValue : ""
+  ];
+  Object.values(component.optionOutputTexts || {}).forEach((text) =>
+    texts.push(text)
+  );
+  // Only text with a brace can hold a token.
+  return texts.map((text) => str(text)).filter((text) => text.includes("{"));
+}
+function designerValueWords(
+  source: FormComponent | undefined,
+  rawValue: unknown
+): string {
+  const value = clean(rawValue);
+  if (!value) {
+    return "(blank)";
+  }
+  if (source?.type === "yesno") {
+    const yesNo = normalizeYesNoValue(value);
+    if (yesNo) {
+      return yesNo === "yes" ? "Yes" : "No";
+    }
+  }
+  if (source && (source.type === "select" || source.type === "radio")) {
+    return clean(source.optionLabels?.[value]) || value;
+  }
+  return value;
+}
+/** One visibility rule as a phrase: `"Has allergies" is Yes`. */
+function describeVisibilityRule(
+  rule: VisibilityRule,
+  componentsByKey: Map<string, FormComponent>
+): { text: string; missing: boolean } {
+  const whenKey = clean(rule.whenKey);
+  const source = componentsByKey.get(whenKey);
+  const missing = Boolean(whenKey) && !source;
+  const name = source
+    ? `"${stripTrailingColon(source.label || source.key)}"`
+    : whenKey
+    ? `"${whenKey}"`
+    : "(no field chosen)";
+  const operator: VisibilityOperator = rule.operator || "equals";
+  const value = designerValueWords(source, rule.value);
+  switch (operator) {
+    case "notEquals":
+      return { text: `${name} is not ${value}`, missing };
+    case "truthy":
+      return { text: `${name} has an answer`, missing };
+    case "falsy":
+      return { text: `${name} is empty`, missing };
+    case "greaterThan":
+      return { text: `${name} is more than ${value}`, missing };
+    case "lessThan":
+      return { text: `${name} is less than ${value}`, missing };
+    case "greaterOrEqual":
+      return { text: `${name} is at least ${value}`, missing };
+    case "lessOrEqual":
+      return { text: `${name} is at most ${value}`, missing };
+    case "contains":
+      return { text: `${name} contains "${clean(rule.value)}"`, missing };
+    case "startsWith":
+      return { text: `${name} starts with "${clean(rule.value)}"`, missing };
+    default:
+      return { text: `${name} is ${value}`, missing };
+  }
+}
+function computeDesignerInsights(
+  components: FormComponent[],
+  known: DesignerKnownTokens | null
+): DesignerInsights {
+  const problems: DesignerProblem[] = [];
+  const insightsByKey: Record<string, DesignerFieldInsight> = {};
+  const logic: DesignerLogicEntry[] = [];
+  const dependantsByKey: DesignerInsights["dependantsByKey"] = {};
+  const componentsByKey = new Map<string, FormComponent>();
+  components.forEach((component) => {
+    if (!componentsByKey.has(component.key)) {
+      componentsByKey.set(component.key, component);
+    }
+  });
+  const controlsByKey = new Map<string, Set<string>>();
+  const seenKeys = new Map<string, FormComponent>();
+  const ensure = (key: string): DesignerFieldInsight => {
+    if (!insightsByKey[key]) {
+      insightsByKey[key] = { problems: [], controls: 0 };
+    }
+    return insightsByKey[key];
+  };
+  const add = (
+    component: FormComponent,
+    kind: DesignerProblem["kind"],
+    text: string
+  ): void => {
+    const label = stripTrailingColon(component.label || component.key);
+    problems.push({
+      componentId: component.id,
+      key: component.key,
+      label,
+      kind,
+      text
+    });
+    ensure(component.key).problems.push(text);
+  };
+  components.forEach((component) => {
+    const scope = `${clean(component.repeatGroup?.key)}|${component.key}`;
+    const earlier = seenKeys.get(scope);
+    if (earlier) {
+      add(
+        component,
+        "duplicateKey",
+        `Key "${component.key}" is already used by "${stripTrailingColon(
+          earlier.label || earlier.key
+        )}". Answers would overwrite each other.`
+      );
+    } else {
+      seenKeys.set(scope, component);
+    }
+    if (
+      (component.type === "select" || component.type === "radio") &&
+      !(component.options && component.options.length)
+    ) {
+      add(component, "noOptions", "This choice has no options.");
+    }
+    const rules = component.visibility?.rules || [];
+    rules.forEach((rule) => {
+      const whenKey = clean(rule.whenKey);
+      if (!whenKey) {
+        return;
+      }
+      if (!componentsByKey.has(whenKey)) {
+        add(
+          component,
+          "missingRuleSource",
+          `Visibility rule points at "${whenKey}", which is not on this form.`
+        );
+        return;
+      }
+      if (!controlsByKey.has(whenKey)) {
+        controlsByKey.set(whenKey, new Set());
+      }
+      controlsByKey.get(whenKey)?.add(component.id);
+      (dependantsByKey[whenKey] = dependantsByKey[whenKey] || []).push({
+        id: component.id,
+        key: component.key
+      });
+    });
+    if (rules.length) {
+      const lines = rules.map((rule, index) => {
+        const described = describeVisibilityRule(rule, componentsByKey);
+        return {
+          joiner:
+            index === 0
+              ? "Shown when"
+              : component.visibility?.mode === "any"
+              ? "or"
+              : "and",
+          text: described.text,
+          missing: described.missing
+        };
+      });
+      // `Shown when "Has allergies" is Yes and 2 more` (mode any: "or 2 more").
+      ensure(component.key).ruleSentence = `Shown when ${lines[0].text}${
+        lines.length > 1 ? ` ${lines[1].joiner} ${lines.length - 1} more` : ""
+      }`;
+      logic.push({
+        componentId: component.id,
+        key: component.key,
+        label: stripTrailingColon(component.label || component.key),
+        lines
+      });
+    }
+    if (known) {
+      const reported = new Set<string>();
+      designerTokenSources(component).forEach((text) => {
+        extractTemplateTokens(text).forEach((token) => {
+          const lower = token.toLowerCase();
+          if (
+            !DESIGNER_DOTTED_TOKEN.test(token) ||
+            known.lower.has(lower) ||
+            reported.has(lower) ||
+            resolveComputedTokenValue(token) !== undefined
+          ) {
+            return;
+          }
+          reported.add(lower);
+          if (!known.suggestions.has(lower)) {
+            known.suggestions.set(lower, suggestDesignerToken(token, known.list));
+          }
+          const near = known.suggestions.get(lower);
+          add(
+            component,
+            "unknownToken",
+            `Token {${token}} is not in the token catalog.${
+              near ? ` Did you mean {${near}}?` : ""
+            }`
+          );
+        });
+      });
+    }
+  });
+  controlsByKey.forEach((ids, key) => {
+    // Only keys that exist on the form were recorded above.
+    ensure(key).controls = ids.size;
+  });
+  return { problems, insightsByKey, logic, dependantsByKey };
+}
+/** The designer Preview's widget map (one object, not one per render). */
+const PREVIEW_FORM_WIDGETS = {
+  date: DateInputWidget,
+  datetime: DateTimeInputWidget,
+  signatureCanvas: SignatureWidget,
+  contentBlock: ContentBlockWidget,
+  systemDatagrid2Placeholder: SystemDatagrid2PlaceholderWidget,
+  scoreTotal: ScoreTotalWidget,
+  numberStepper: NumberStepperWidget,
+  numberScale: NumberScaleWidget,
+  multiSelectDropdown: MultiSelectDropdownWidget,
+  TextareaWidget: StableTextareaWidget
+};
+/** Third / half / full on the 12-track grid. */
+const DESIGNER_WIDTH_STOPS = [4, 6, 12];
+// Stable empties, so the viewer's fields do not see a new `{}` on every render.
+const NO_DESIGNER_INSIGHTS: Record<string, DesignerFieldInsight> =
+  Object.freeze({});
+const NO_DESIGNER_RELATIONS: Record<string, "source" | "dependant"> =
+  Object.freeze({});
+const DESIGNER_RELATION_LABELS: Record<"source" | "dependant", string> = {
+  source: "Source of the selected field",
+  dependant: "Depends on the selected field"
+};
+/** Pointer travel before an edge press counts as a drag. */
+const RESIZE_DRAG_THRESHOLD_PX = 12;
+function designerWidthName(span: number): string {
+  return span === 4
+    ? "Third"
+    : span === 6
+    ? "Half"
+    : span === 12
+    ? "Full"
+    : `${span}/12`;
+}
+
 function FormStudioBuilderMain(
   props: FormStudioBuilderProps
 ): ReactElement {
@@ -12297,6 +13451,14 @@ function FormStudioBuilderMain(
     fsCurrentSink = fsSink;
   });
   const source = props.dataSource?.[0];
+  // Client audience (viewer): questions marked Staff only are taken out of the
+  // definition this instance works with, so nothing downstream (fill form,
+  // document preview, counts, missing marks, prefill) can show or count them.
+  // Their stored answers are kept aside and written back unchanged.
+  const clientAudience =
+    props.viewMode === "viewer" && props.audience === "client";
+  const hiddenAnswerKeysRef = useRef<string[]>([]);
+  const protectedAnswersRef = useRef<JsonObject>({});
   // Per-widget-instance RJSF id prefix. The widget can be instantiated once
   // per ListView row; RJSF's default "root" prefix would then emit duplicate
   // DOM ids (#root_<fieldKey>) across instances, so id-based lookups
@@ -12320,6 +13482,22 @@ function FormStudioBuilderMain(
     placement: DropPlacement;
   } | null>(null);
   const [builderTab, setBuilderTab] = useState<BuilderTab>("designer");
+  // Designer view state (0.12.0): Check, rail lists, preview. None of this is
+  // persisted and none of it ever reaches the Mendix attributes.
+  const [checkActive, setCheckActive] = useState<boolean>(false);
+  const [problemIndex, setProblemIndex] = useState<number>(-1);
+  const [railView, setRailView] = useState<"properties" | "logic" | "problems">(
+    "properties"
+  );
+  // Set when a rail list entry (not the canvas) changes the selection.
+  const railListPickRef = useRef<boolean>(false);
+  const [canvasMode, setCanvasMode] = useState<"design" | "preview">("design");
+  const [previewPhone, setPreviewPhone] = useState<boolean>(false);
+  const [previewAs, setPreviewAs] = useState<"staff" | "client" | "print">(
+    "staff"
+  );
+  const [previewAnswers, setPreviewAnswers] = useState<JsonObject>({});
+  const [previewResetCount, setPreviewResetCount] = useState<number>(0);
   const [rightPanelTab, setRightPanelTab] =
     useState<RightPanelTab>("properties");
   const [paletteFilter, setPaletteFilter] = useState<string>("");
@@ -12559,8 +13737,26 @@ function FormStudioBuilderMain(
           ? mappedDescription
           : parsed.value.description || ""
     };
-    setDefinition(nextDefinition);
     const incomingFormData = parseFormData(source?.formDataAttr?.value);
+    hiddenAnswerKeysRef.current = [];
+    protectedAnswersRef.current = {};
+    if (clientAudience) {
+      const hiddenIds = staffOnlyComponentIds(nextDefinition.components);
+      if (hiddenIds.size) {
+        hiddenAnswerKeysRef.current = staffOnlyAnswerKeys(
+          nextDefinition.components
+        );
+        protectedAnswersRef.current = pickAnswers(
+          incomingFormData.value,
+          hiddenAnswerKeysRef.current
+        );
+        nextDefinition.components = withoutStaffOnlyComponents(
+          nextDefinition.components,
+          hiddenIds
+        );
+      }
+    }
+    setDefinition(nextDefinition);
     const hydratedData = sanitizeFormData(
       incomingFormData.value,
       nextDefinition
@@ -12608,6 +13804,10 @@ function FormStudioBuilderMain(
       return;
     }
     const parsed = parseFormData(source?.formDataAttr?.value);
+    protectedAnswersRef.current = pickAnswers(
+      parsed.value,
+      hiddenAnswerKeysRef.current
+    );
     setFormData(sanitizeFormData(parsed.value, definitionRef.current));
     lastIncomingFormDataValueRef.current = incomingDataValue;
     if (parsed.error) {
@@ -12763,12 +13963,40 @@ function FormStudioBuilderMain(
     props.viewMode === "viewer" &&
     source?.formDataAttr != null &&
     source.formDataAttr.readOnly !== true;
+  // lockClientAnswers (viewer fill form): staff answer the staff-only
+  // questions; everything else keeps its stored value and is not prefilled.
+  const lockClientAnswers =
+    props.viewMode === "viewer" &&
+    resolveBooleanSetting(props.lockClientAnswers, false);
+  const lockClientAnswersRef = useRef<boolean>(false);
+  lockClientAnswersRef.current = lockClientAnswers;
+  const staffOnlyIds = useMemo(
+    () => staffOnlyComponentIds(definition.components),
+    [definition.components]
+  );
+  const staffOnlyKeysRef = useRef<string[]>([]);
+  staffOnlyKeysRef.current = useMemo(
+    () => (lockClientAnswers ? staffOnlyAnswerKeys(definition.components) : []),
+    [lockClientAnswers, definition.components]
+  );
+  const prefillDefinition = useMemo(
+    () =>
+      lockClientAnswers
+        ? {
+            ...definition,
+            components: definition.components.filter((component) =>
+              staffOnlyIds.has(component.id)
+            )
+          }
+        : definition,
+    [lockClientAnswers, definition, staffOnlyIds]
+  );
   const viewerFormData = useMemo(
     () =>
       tokenPrefillEnabled
-        ? applyTokenPrefill(formData, definition, tokenContext)
+        ? applyTokenPrefill(formData, prefillDefinition, tokenContext)
         : formData,
-    [tokenPrefillEnabled, formData, definition, tokenContext]
+    [tokenPrefillEnabled, formData, prefillDefinition, tokenContext]
   );
   // What the RJSF forms receive (see withEmptyMatrixObjects). Counts, tokens
   // and saving keep using formData / viewerFormData.
@@ -12783,9 +14011,20 @@ function FormStudioBuilderMain(
   const prefilledKeys = useMemo(
     () =>
       tokenPrefillEnabled
-        ? computePrefilledKeys(formData, viewerFormData, definition, tokenContext)
+        ? computePrefilledKeys(
+            formData,
+            viewerFormData,
+            prefillDefinition,
+            tokenContext
+          )
         : EMPTY_PREFILLED_KEYS,
-    [tokenPrefillEnabled, formData, viewerFormData, definition, tokenContext]
+    [
+      tokenPrefillEnabled,
+      formData,
+      viewerFormData,
+      prefillDefinition,
+      tokenContext
+    ]
   );
   useEffect(() => {
     if (builderTab === "json") {
@@ -12816,8 +14055,15 @@ function FormStudioBuilderMain(
       ) {
         return;
       }
-      const nextDefinitionJson = serializeDefinitionWithManifest(nextDefinition);
-      writeAttribute(source?.formDefinitionAttr, nextDefinitionJson);
+      // An audience-filtered definition is never written back: it lacks the
+      // staff-only questions.
+      const audienceFiltered = hiddenAnswerKeysRef.current.length > 0;
+      const nextDefinitionJson = audienceFiltered
+        ? lastIncomingDefinitionValueRef.current
+        : serializeDefinitionWithManifest(nextDefinition);
+      if (!audienceFiltered) {
+        writeAttribute(source?.formDefinitionAttr, nextDefinitionJson);
+      }
       const rawTitle =
         nextDefinition.title == null ? "" : String(nextDefinition.title);
       const nextTitleValue = rawTitle.trim()
@@ -12860,7 +14106,13 @@ function FormStudioBuilderMain(
         }
       }
       const nextDataJson = JSON.stringify(
-        assertAnswersShape(sanitizedData),
+        assertAnswersShape(
+          withProtectedAnswers(
+            sanitizedData,
+            hiddenAnswerKeysRef.current,
+            protectedAnswersRef.current
+          )
+        ),
         null,
         2
       );
@@ -12896,7 +14148,13 @@ function FormStudioBuilderMain(
         return;
       }
       const nextDataJson = JSON.stringify(
-        assertAnswersShape(sanitizedData),
+        assertAnswersShape(
+          withProtectedAnswers(
+            sanitizedData,
+            hiddenAnswerKeysRef.current,
+            protectedAnswersRef.current
+          )
+        ),
         null,
         2
       );
@@ -13009,34 +14267,55 @@ function FormStudioBuilderMain(
       if (!hasHydratedDefinitionRef.current) {
         return;
       }
-      const currentSectionVisibility = parseSectionVisibilityMap(
-        formDataRef.current[SECTION_VISIBILITY_DATA_KEY]
-      );
-      const nextDataWithSectionVisibility: JsonObject = { ...nextData };
-      if (
-        !Object.prototype.hasOwnProperty.call(
-          nextDataWithSectionVisibility,
-          SECTION_VISIBILITY_DATA_KEY
-        ) &&
-        Object.keys(currentSectionVisibility).length
-      ) {
-        nextDataWithSectionVisibility[SECTION_VISIBILITY_DATA_KEY] =
-          currentSectionVisibility;
-      }
-      const sanitizedNext = sanitizeFormData(
-        nextDataWithSectionVisibility,
-        definitionRef.current
-      );
-      const sanitizedCurrent = sanitizeFormData(
+      const normalized = normalizeAnswerData(
+        nextData,
         formDataRef.current,
-        definitionRef.current
+        definitionRef.current,
+        lockClientAnswersRef.current ? staffOnlyKeysRef.current : null
       );
-      if (JSON.stringify(sanitizedNext) === JSON.stringify(sanitizedCurrent)) {
+      if (normalized.unchanged) {
         return;
       }
-      persistDataOnly(sanitizedNext, true);
+      persistDataOnly(normalized.data, true);
     },
     [persistDataOnly]
+  );
+  // Preview (designer): the same normalisation, but the result only goes into
+  // local state. Nothing here reaches a Mendix attribute.
+  const updatePreviewAnswers = useCallback((nextData: JsonObject) => {
+    setPreviewAnswers((current) => {
+      const normalized = normalizeAnswerData(
+        nextData,
+        current,
+        definitionRef.current,
+        null
+      );
+      return normalized.unchanged ? current : normalized.data;
+    });
+  }, []);
+  const onPreviewSectionVisibilityChange = useCallback(
+    (sectionKey: string, isVisible: boolean) => {
+      const normalizedKey = clean(sectionKey);
+      if (!normalizedKey) {
+        return;
+      }
+      setPreviewAnswers((current) => {
+        const normalized = normalizeAnswerData(
+          {
+            ...current,
+            [SECTION_VISIBILITY_DATA_KEY]: {
+              ...parseSectionVisibilityMap(current[SECTION_VISIBILITY_DATA_KEY]),
+              [normalizedKey]: isVisible
+            }
+          },
+          current,
+          definitionRef.current,
+          null
+        );
+        return normalized.unchanged ? current : normalized.data;
+      });
+    },
+    []
   );
   const selectedComponent = useMemo(
     () =>
@@ -13491,12 +14770,18 @@ function FormStudioBuilderMain(
   // The designer's Document preview also says where and why an item is left
   // out; the viewer's preview is the real output.
   const outputNotesShown = props.viewMode !== "viewer";
+  // Designer: the answers given in Preview are local to the designer and are
+  // what the document preview prints once there are any.
+  const outputPreviewData =
+    props.viewMode !== "viewer" && Object.keys(previewAnswers).length
+      ? previewAnswers
+      : formData;
   const documentPreviewBodyHtml = useMemo(
     () =>
       outputHtmlShown
         ? resolveDocumentOutputHtml(
             definition,
-            formData,
+            outputPreviewData,
             tokenContext,
             systemSectionHtmlBySlot,
             undefined,
@@ -13507,7 +14792,7 @@ function FormStudioBuilderMain(
       outputHtmlShown,
       outputNotesShown,
       definition,
-      formData,
+      outputPreviewData,
       tokenContext,
       systemSectionHtmlBySlot
     ]
@@ -13914,7 +15199,13 @@ function FormStudioBuilderMain(
     });
     return Object.values(summary).sort((a, b) => a.name.localeCompare(b.name));
   }, [definition.components]);
-  const viewerSectionSummaries = useMemo(() => {
+  // Per-section counts for a set of components and the answers shown for them
+  // (the fill form's rail and section headers, and the designer's Preview).
+  const summarizeSections = useCallback((
+    components: FormComponent[],
+    data: JsonObject,
+    prefilled: ReadonlySet<string>
+  ) => {
     const summary: Record<
       string,
       {
@@ -13932,7 +15223,7 @@ function FormStudioBuilderMain(
     > = {};
     // Counts run against viewerFormData (token prefill applied) so the rail
     // agrees with what the user sees before the first autosave lands.
-    definition.components.forEach((component, index) => {
+    components.forEach((component, index) => {
       const normalizedSection = normalizeSectionName(component.section);
       const sectionKey = resolveComponentSectionKey(component);
       const sectionName = normalizedSection || "Unsectioned";
@@ -13954,7 +15245,7 @@ function FormStudioBuilderMain(
       sectionSummary.count += 1;
       const isVisible = isComponentVisibleForSummary(
         component,
-        viewerFormData,
+        data,
         componentsByKey
       );
       if (isVisible) {
@@ -13969,10 +15260,10 @@ function FormStudioBuilderMain(
         return;
       }
       sectionSummary.trackableCount += 1;
-      if (prefilledKeys.has(component.key)) {
+      if (prefilled.has(component.key)) {
         sectionSummary.prefilledCount += 1;
       }
-      const isComplete = hasOutputValue(component, viewerFormData);
+      const isComplete = hasOutputValue(component, data);
       if (isComplete) {
         sectionSummary.completedCount += 1;
       }
@@ -14006,29 +15297,16 @@ function FormStudioBuilderMain(
           hasWarning: section.requiredIncompleteCount > 0
         };
       });
-  }, [componentsByKey, definition.components, viewerFormData, prefilledKeys]);
-  const sectionStatsByKey = useMemo(() => {
-    const map: Record<
-      string,
-      {
-        reqTotal: number;
-        reqDone: number;
-        prefilled: number;
-        fields: number;
-        completed: number;
-      }
-    > = {};
-    viewerSectionSummaries.forEach((section) => {
-      map[section.key] = {
-        reqTotal: section.requiredCount,
-        reqDone: section.requiredCompleteCount,
-        prefilled: section.prefilledCount,
-        fields: section.trackableCount,
-        completed: section.completedCount
-      };
-    });
-    return map;
-  }, [viewerSectionSummaries]);
+  }, [componentsByKey]);
+  const viewerSectionSummaries = useMemo(
+    () =>
+      summarizeSections(definition.components, viewerFormData, prefilledKeys),
+    [summarizeSections, definition.components, viewerFormData, prefilledKeys]
+  );
+  const sectionStatsByKey = useMemo(
+    () => buildSectionStats(viewerSectionSummaries),
+    [viewerSectionSummaries]
+  );
   // Wizard fill mode: one section per page. The active section key lives
   // here; the ObjectTemplate resolves ordering, renders the nav bar, and
   // calls back through formContext.wizard.onNavigate.
@@ -14096,23 +15374,20 @@ function FormStudioBuilderMain(
     setPreviewScrollToSectionKey(sectionKey);
     setPreviewScrollRequest((current) => current + 1);
   }, []);
+  const isMissingRequired = useCallback(
+    (component: FormComponent): boolean =>
+      !!component.required &&
+      isTrackableSectionSummaryComponent(component) &&
+      // Switch-hidden sections are excluded from output; jumping the
+      // user into their unrendered stub is a dead end.
+      !isSectionSwitchHidden(component) &&
+      isComponentVisibleForSummary(component, viewerFormData, componentsByKey) &&
+      !hasOutputValue(component, viewerFormData),
+    [viewerFormData, componentsByKey, isSectionSwitchHidden]
+  );
   const firstMissingRequired = useMemo(
-    () =>
-      definition.components.find(
-        (component) =>
-          component.required &&
-          isTrackableSectionSummaryComponent(component) &&
-          // Switch-hidden sections are excluded from output; jumping the
-          // user into their unrendered stub is a dead end.
-          !isSectionSwitchHidden(component) &&
-          isComponentVisibleForSummary(
-            component,
-            viewerFormData,
-            componentsByKey
-          ) &&
-          !hasOutputValue(component, viewerFormData)
-      ),
-    [definition.components, viewerFormData, componentsByKey, isSectionSwitchHidden]
+    () => definition.components.find(isMissingRequired),
+    [definition.components, isMissingRequired]
   );
   const jumpToNextRequired = useCallback(() => {
     const target = firstMissingRequired;
@@ -14345,17 +15620,14 @@ function FormStudioBuilderMain(
     () => (simulateRules ? buildSchema(definition) : buildSchema(definition, true)),
     [definition, simulateRules]
   );
-  const uiSchema = useMemo(() => buildUiSchema(definition), [definition]);
-  const contentBlockTokenValues = useMemo(() => {
-    if (
-      !definition.components.some(
-        (component) => component.type === "contentBlock"
-      )
-    ) {
-      return {} as Record<string, string>;
-    }
-    return buildTokenScope(definition, formData, tokenContext);
-  }, [definition, formData, tokenContext]);
+  const uiSchema = useMemo(
+    () => buildUiSchema(definition, lockClientAnswers),
+    [definition, lockClientAnswers]
+  );
+  const contentBlockTokenValues = useMemo(
+    () => buildContentBlockTokens(definition, formData, tokenContext),
+    [definition, formData, tokenContext]
+  );
   const componentMetaByKey = useMemo(
     () =>
       definition.components.reduce((map, component, index) => {
@@ -16009,10 +17281,298 @@ function FormStudioBuilderMain(
     (key: string) => {
       const id = componentIdByKey[key];
       if (id) {
+        // A click on the canvas shows that field's Properties, also when it is
+        // the field already selected (the selection effect below only sees a
+        // change of field).
+        setRailView("properties");
         setSelectedId(id);
       }
     },
     [componentIdByKey]
+  );
+  // ---- Designer: Check, Logic list, preview (0.12.0) -------------------------
+  // Known dotted tokens. null = no token catalog loaded: the token check is
+  // skipped rather than flagging every reference.
+  const designerKnownTokens = useMemo<DesignerKnownTokens | null>(() => {
+    if (viewModeIsViewer || !tokenCatalog.length) {
+      return null;
+    }
+    const list = [
+      ...tokenCatalog.map((token) => token.key),
+      ...Object.keys(tokenContext)
+    ];
+    return {
+      list,
+      lower: new Set(list.map((token) => token.toLowerCase())),
+      suggestions: new Map()
+    };
+  }, [viewModeIsViewer, tokenCatalog, tokenContext]);
+  const designerInsights = useMemo<DesignerInsights>(
+    () =>
+      viewModeIsViewer
+        ? NO_DESIGNER_INSIGHT_SET
+        : computeDesignerInsights(definition.components, designerKnownTokens),
+    [viewModeIsViewer, definition.components, designerKnownTokens]
+  );
+  const designerProblems = designerInsights.problems;
+  const designerRelationByKey = useMemo<
+    Record<string, "source" | "dependant">
+  >(() => {
+    if (viewModeIsViewer || !selectedComponent) {
+      return NO_DESIGNER_RELATIONS;
+    }
+    const relations: Record<string, "source" | "dependant"> = {};
+    (selectedComponent.visibility?.rules || []).forEach((rule) => {
+      const whenKey = clean(rule.whenKey);
+      if (
+        whenKey &&
+        whenKey !== selectedComponent.key &&
+        componentsByKey.has(whenKey)
+      ) {
+        relations[whenKey] = "source";
+      }
+    });
+    (designerInsights.dependantsByKey[selectedComponent.key] || []).forEach(
+      (dependant) => {
+        if (dependant.id !== selectedComponent.id && !relations[dependant.key]) {
+          relations[dependant.key] = "dependant";
+        }
+      }
+    );
+    return relations;
+  }, [viewModeIsViewer, selectedComponent, componentsByKey, designerInsights]);
+  const scrollCanvasToKey = useCallback(
+    (key: string) => {
+      if (!rootNode) {
+        return;
+      }
+      window.requestAnimationFrame(() => {
+        const target = Array.from(
+          rootNode.querySelectorAll<HTMLElement>("[data-fs-key]")
+        ).find((node) => node.getAttribute("data-fs-key") === key);
+        target?.scrollIntoView({ block: "center", behavior: "smooth" });
+      });
+    },
+    [rootNode]
+  );
+  /** Selects a field from a rail list or the problem stepper and shows it. */
+  const goToDesignerComponent = useCallback(
+    (componentId: string, nextRailView?: "properties" | "logic" | "problems") => {
+      const target = definitionRef.current.components.find(
+        (item) => item.id === componentId
+      );
+      if (!target) {
+        return;
+      }
+      setBuilderTab("designer");
+      setCanvasMode("design");
+      if (componentId !== selectedIdRef.current) {
+        // A pick from a rail list keeps that list open (see the effect below).
+        railListPickRef.current = true;
+      }
+      setSelectedId(componentId);
+      if (nextRailView) {
+        setRailView(nextRailView);
+      }
+      scrollCanvasToKey(target.key);
+    },
+    [scrollCanvasToKey]
+  );
+  // Any other selection (a click on the canvas, a field added from the
+  // palette) shows that field's Properties, even after Check left the rail on
+  // Problems.
+  useEffect(() => {
+    if (railListPickRef.current) {
+      railListPickRef.current = false;
+      return;
+    }
+    setRailView("properties");
+  }, [selectedId]);
+  const stepDesignerProblem = useCallback(
+    (delta: number) => {
+      const count = designerProblems.length;
+      if (!count) {
+        return;
+      }
+      const base = problemIndex < 0 ? (delta > 0 ? -1 : 0) : problemIndex;
+      const next = (base + delta + count) % count;
+      setProblemIndex(next);
+      goToDesignerComponent(
+        designerProblems[next].componentId,
+        railView === "logic" ? "properties" : undefined
+      );
+    },
+    [designerProblems, problemIndex, railView, goToDesignerComponent]
+  );
+  const onCheckClick = useCallback(() => {
+    setCheckActive(true);
+    setRightPanelCollapsed(false);
+    setRailView("problems");
+    if (designerProblems.length) {
+      setProblemIndex(0);
+      goToDesignerComponent(designerProblems[0].componentId, "problems");
+    } else {
+      setProblemIndex(-1);
+    }
+  }, [designerProblems, goToDesignerComponent]);
+  const onDesignerSaveClick = useCallback(() => {
+    // Save is never blocked by Check; it only turns the problem marks on.
+    setCheckActive(true);
+    onSaveClick();
+  }, [onSaveClick]);
+  // Preview (Design | Preview in the canvas, and the Preview tab): answers
+  // stay in this component's state. Nothing here calls persist.
+  const previewActive =
+    !viewModeIsViewer &&
+    (builderTab === "preview" ||
+      (builderTab === "designer" && canvasMode === "preview"));
+  const previewFormMode = previewActive && previewAs !== "print";
+  const previewDefinition = useMemo<FormDefinition>(() => {
+    if (!previewActive || previewAs !== "client" || !staffOnlyIds.size) {
+      return definition;
+    }
+    // Same as audience "client": staff-only questions are taken out.
+    return {
+      ...definition,
+      components: withoutStaffOnlyComponents(
+        definition.components,
+        staffOnlyIds
+      )
+    };
+  }, [previewActive, previewAs, definition, staffOnlyIds]);
+  const previewSchema = useMemo(
+    () => (previewFormMode ? buildSchema(previewDefinition) : null),
+    [previewFormMode, previewDefinition]
+  );
+  const previewUiSchema = useMemo(
+    () => (previewFormMode ? buildUiSchema(previewDefinition, false) : null),
+    [previewFormMode, previewDefinition]
+  );
+  const previewFormData = useMemo<JsonObject>(
+    () =>
+      previewFormMode
+        ? withEmptyMatrixObjects(
+            applyTokenPrefill(previewAnswers, previewDefinition, tokenContext),
+            previewDefinition
+          )
+        : {},
+    [previewFormMode, previewAnswers, previewDefinition, tokenContext]
+  );
+  const previewTokenValues = useMemo<Record<string, string>>(
+    () =>
+      previewFormMode
+        ? buildContentBlockTokens(previewDefinition, previewAnswers, tokenContext)
+        : {},
+    [previewFormMode, previewDefinition, previewAnswers, tokenContext]
+  );
+  // Section switches and counts for Preview come from the Preview answers, not
+  // from the real form data.
+  const previewSectionVisibilityByKey = useMemo(
+    () =>
+      applySectionVisibilityLegacyFallback(
+        parseSectionVisibilityMap(previewAnswers[SECTION_VISIBILITY_DATA_KEY]),
+        definition.components
+      ),
+    [previewAnswers, definition.components]
+  );
+  const previewSectionStatsByKey = useMemo(
+    () =>
+      previewFormMode
+        ? buildSectionStats(
+            summarizeSections(
+              previewDefinition.components,
+              previewFormData,
+              computePrefilledKeys(
+                previewAnswers,
+                previewFormData,
+                previewDefinition,
+                tokenContext
+              )
+            )
+          )
+        : NO_SECTION_STATS,
+    [
+      previewFormMode,
+      summarizeSections,
+      previewDefinition,
+      previewFormData,
+      previewAnswers,
+      tokenContext
+    ]
+  );
+  const previewPrintHtml = useMemo(
+    () =>
+      previewActive && previewAs === "print"
+        ? resolveDocumentOutputHtml(
+            definition,
+            applyTokenPrefill(previewAnswers, definition, tokenContext),
+            tokenContext,
+            systemSectionHtmlBySlot,
+            undefined,
+            false
+          )
+        : "",
+    [
+      previewActive,
+      previewAs,
+      definition,
+      previewAnswers,
+      tokenContext,
+      systemSectionHtmlBySlot
+    ]
+  );
+  // Hooks stay above the viewer's early returns further down.
+  const previewFormContext = useMemo(
+    () => ({
+      instanceIdPrefix: `${instanceIdPrefix}_pv`,
+      componentMetaByKey,
+      previewReorderEnabled: false,
+      previewResizeEnabled: false,
+      onPreviewDropField: undefined,
+      onPreviewMoveComponent: undefined,
+      onPreviewResizeSection: undefined,
+      onPreviewMoveSection: undefined,
+      onPreviewSelectKey: undefined,
+      showSectionBulkToggle: true,
+      showSectionVisibilityToggle: true,
+      previewSectionSettingsEnabled: false,
+      onPreviewUpdateSectionSettings: undefined,
+      sectionSwitchableByKey,
+      // Preview's own switches and counts: nothing here touches the real
+      // form data.
+      sectionVisibilityByKey: previewSectionVisibilityByKey,
+      onSectionVisibilityChange: onPreviewSectionVisibilityChange,
+      systemTemplateSlotRenderers,
+      systemSectionHtmlBySlot,
+      selectedPreviewKey: undefined,
+      wizard: wizardContext,
+      snapToGrid: false,
+      snapToResize: false,
+      labelLayout:
+        definition.builderOptions?.labelLayout === "inline"
+          ? "inline"
+          : "block"
+    }),
+    [
+      instanceIdPrefix,
+      componentMetaByKey,
+      sectionSwitchableByKey,
+      previewSectionVisibilityByKey,
+      onPreviewSectionVisibilityChange,
+      systemTemplateSlotRenderers,
+      systemSectionHtmlBySlot,
+      wizardContext,
+      definition.builderOptions?.labelLayout
+    ]
+  );
+  // Values that change with every answer travel in the live context, as in the
+  // real fill form, so the fields are not redrawn by the form context.
+  const previewLiveValues = useMemo<FsLiveValues>(
+    () => ({
+      contentBlockTokens: previewTokenValues,
+      sectionStatsByKey: previewSectionStatsByKey
+    }),
+    [previewTokenValues, previewSectionStatsByKey]
   );
   const loadJsonDraftFromCurrent = useCallback(() => {
     setJsonDefinitionDraft(JSON.stringify(definitionRef.current, null, 2));
@@ -16119,6 +17679,136 @@ function FormStudioBuilderMain(
     false
   );
   const formLiveValidate = resolveBooleanSetting(props.formLiveValidate, false);
+  // Opt-in (page property): outline every unanswered required question in the
+  // fill form and say what is wanted; a mark goes as soon as its question is
+  // answered. When the flag turns on, the first instance on the page that has
+  // a missing answer scrolls to it.
+  const showMissingRequired =
+    isViewer &&
+    !showDocumentPreview &&
+    resolveBooleanSetting(props.showMissingRequired, false);
+  const missingRequiredKeys = useMemo(
+    () =>
+      showMissingRequired
+        ? definition.components
+            .filter(
+              (component) =>
+                (!lockClientAnswers || staffOnlyIds.has(component.id)) &&
+                isMissingRequired(component)
+            )
+            .map((component) => component.key)
+        : [],
+    [
+      lockClientAnswers,
+      staffOnlyIds,
+      showMissingRequired,
+      definition.components,
+      isMissingRequired
+    ]
+  );
+  // Runs after every render while there is (or was) something to mark: RJSF
+  // may re-create a field's wrapper. A viewer that marks nothing leaves at once.
+  const hasMissingMarksRef = useRef<boolean>(false);
+  useEffect(() => {
+    if (!missingRequiredKeys.length && !hasMissingMarksRef.current) {
+      return;
+    }
+    const root = viewerFillRef.current;
+    if (!root) {
+      return;
+    }
+    hasMissingMarksRef.current = missingRequiredKeys.length > 0;
+    const wanted = new Set<HTMLElement>();
+    missingRequiredKeys.forEach((key) => {
+      const control =
+        document.getElementById(`${instanceIdPrefix}_${key}`) ||
+        root.querySelector<HTMLElement>(`[id^="${instanceIdPrefix}_${key}"]`);
+      const field =
+        control && root.contains(control)
+          ? (control.closest(".rjsf-field") as HTMLElement | null)
+          : null;
+      if (!field) {
+        return;
+      }
+      wanted.add(field);
+      field.classList.add("rjsf-builder__field--missing");
+      field.setAttribute(
+        "data-fs-missing",
+        "Please answer this question to continue."
+      );
+      control?.setAttribute("aria-invalid", "true");
+    });
+    root
+      .querySelectorAll<HTMLElement>(".rjsf-builder__field--missing")
+      .forEach((field) => {
+        if (wanted.has(field)) {
+          return;
+        }
+        field.classList.remove("rjsf-builder__field--missing");
+        field.removeAttribute("data-fs-missing");
+        field
+          .querySelectorAll('[aria-invalid="true"]')
+          .forEach((node) => node.removeAttribute("aria-invalid"));
+      });
+  });
+  // lockClientAnswers: the locked fields (class from the uiSchema) cannot be
+  // focused or changed. Runs after every render, like the marks above, and
+  // only while the lock is on (plus once after it goes off, to clear).
+  const hadLockedFieldsRef = useRef<boolean>(false);
+  useEffect(() => {
+    if (!lockClientAnswers && !hadLockedFieldsRef.current) {
+      return;
+    }
+    const root = viewerFillRef.current;
+    if (!root) {
+      return;
+    }
+    hadLockedFieldsRef.current = lockClientAnswers;
+    root
+      .querySelectorAll<HTMLElement>(".rjsf-builder__field--locked")
+      .forEach((field) => {
+        if (!field.hasAttribute("inert")) {
+          field.setAttribute("inert", "");
+        }
+      });
+    root.querySelectorAll<HTMLElement>("[inert]").forEach((field) => {
+      if (
+        field.classList.contains("rjsf-field") &&
+        !field.classList.contains("rjsf-builder__field--locked")
+      ) {
+        field.removeAttribute("inert");
+      }
+    });
+  });
+  const hasMissingRequiredMarks = missingRequiredKeys.length > 0;
+  useEffect(() => {
+    if (!showMissingRequired || !hasMissingRequiredMarks) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      const root = viewerFillRef.current;
+      const first = document.querySelector<HTMLElement>(
+        ".rjsf-builder__field--missing"
+      );
+      if (!root || !first || !root.contains(first)) {
+        return; // an earlier section on the page owns the first missing answer
+      }
+      // No focus: on a phone the keyboard would cover the message, and the
+      // focus ring would replace the red outline.
+      first.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 80);
+    return () => window.clearTimeout(timer);
+    // Only when the page turns the flag on, not on every answer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showMissingRequired]);
+  const stackedPreview = isViewer && props.previewAnswerLayout === "stacked";
+  const shownPreviewBodyHtml = useMemo(
+    () =>
+      stackedPreview
+        ? decorateStackedPreviewHtml(documentPreviewBodyHtml)
+        : documentPreviewBodyHtml,
+    [stackedPreview, documentPreviewBodyHtml]
+  );
   const onSectionVisibilityChange = useCallback(
     (sectionKey: string, isVisible: boolean) => {
       const normalizedKey = clean(sectionKey);
@@ -16426,6 +18116,176 @@ function FormStudioBuilderMain(
       />{" "}
     </label>
   ) : null;
+  // ---- Design | Preview (canvas head) and the preview itself (0.12.0) --------
+  // One preview for both entries: the Preview tab and the Preview button in the
+  // canvas. Answers live in previewAnswers only; nothing here persists.
+  const previewNote =
+    previewAs === "client"
+      ? "Client view, as in signing mode: questions marked Staff only are left out."
+      : previewAs === "print"
+      ? "Printed output shows what the PDF prints for the answers given here. Fill the form as staff first, then switch back to this view."
+      : "";
+  const previewCanvas = (
+    <div
+      className={`rjsf-builder__device${
+        previewPhone ? " rjsf-builder__device--phone" : ""
+      }`}
+      data-fs-preview-device={previewPhone ? "phone" : "desktop"}
+      data-fs-preview-as={previewAs}
+    >
+      {previewNote ? (
+        <div className="rjsf-builder__preview-note" data-fs-preview-note="">
+          {previewNote}
+        </div>
+      ) : null}
+      {previewAs === "print" ? (
+        hasMeaningfulHtml(previewPrintHtml) ? (
+          <div
+            className="rjsf-builder__document-preview-body rjsf-builder__output-style-preview"
+            data-fs-preview-print=""
+            dangerouslySetInnerHTML={htmlProp(previewPrintHtml)}
+          />
+        ) : (
+          <div className="rjsf-builder__help">
+            Nothing to print yet. Add fields, or fill in the form as staff.
+          </div>
+        )
+      ) : previewSchema && previewUiSchema ? (
+        <FsLiveContext.Provider value={previewLiveValues}>
+        <Form
+          key={`preview-${previewAs}-${previewResetCount}`}
+          schema={previewSchema as any}
+          uiSchema={previewUiSchema as any}
+          formData={previewFormData}
+          validator={validator}
+          idPrefix={`${instanceIdPrefix}_pv`}
+          experimental_defaultFormStateBehavior={{
+            constAsDefaults: "skipOneOf"
+          }}
+          formContext={previewFormContext}
+          widgets={PREVIEW_FORM_WIDGETS}
+          fields={FORM_FIELDS}
+          templates={FORM_TEMPLATES}
+          liveValidate={formLiveValidate}
+          noHtml5Validate
+          showErrorList={false}
+          transformErrors={transformValidationErrors}
+          onChange={(event: any) =>
+            updatePreviewAnswers((event?.formData || {}) as JsonObject)
+          }
+        >
+          {" "}
+          <button
+            className="rjsf-builder__hidden-submit"
+            type="submit"
+            tabIndex={-1}
+            aria-hidden="true"
+          />{" "}
+        </Form>
+        </FsLiveContext.Provider>
+      ) : null}
+    </div>
+  );
+  const renderSegment = (
+    ariaLabel: string,
+    dataAttribute: string,
+    options: Array<{
+      value: string;
+      label: string;
+      active: boolean;
+      onSelect: () => void;
+    }>
+  ): ReactElement => (
+    <div className="rjsf-builder__seg" role="group" aria-label={ariaLabel}>
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          className={`rjsf-builder__seg-btn${option.active ? " is-active" : ""}`}
+          aria-pressed={option.active}
+          {...{ [dataAttribute]: option.value }}
+          onClick={option.onSelect}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+  const canvasHead = !isViewer ? (
+    <div className="rjsf-builder__canvas-head" data-fs-canvas-head="">
+      {renderSegment("Canvas mode", "data-fs-canvas-mode", [
+        {
+          value: "design",
+          label: "Design",
+          active: !previewActive,
+          onSelect: () => {
+            setCanvasMode("design");
+            setBuilderTab("designer");
+          }
+        },
+        {
+          value: "preview",
+          label: "Preview",
+          active: previewActive,
+          onSelect: () => {
+            if (builderTab === "designer") {
+              setCanvasMode("preview");
+            }
+          }
+        }
+      ])}
+      {previewActive ? (
+        <Fragment>
+          {renderSegment("Preview width", "data-fs-preview-width", [
+            {
+              value: "desktop",
+              label: "Desktop",
+              active: !previewPhone,
+              onSelect: () => setPreviewPhone(false)
+            },
+            {
+              value: "phone",
+              label: "Phone width",
+              active: previewPhone,
+              onSelect: () => setPreviewPhone(true)
+            }
+          ])}
+          <label className="rjsf-builder__preview-as">
+            <span>Preview as</span>
+            <select
+              className="rjsf-builder__select rjsf-builder__select--compact"
+              value={previewAs}
+              data-fs-preview-as-select=""
+              onChange={(event) =>
+                setPreviewAs(
+                  event.target.value === "client"
+                    ? "client"
+                    : event.target.value === "print"
+                    ? "print"
+                    : "staff"
+                )
+              }
+            >
+              <option value="staff">Staff filling it in</option>
+              <option value="client">Client, signing mode</option>
+              <option value="print">Printed output</option>
+            </select>
+          </label>
+          <button
+            type="button"
+            className="rjsf-builder__button rjsf-builder__button--small"
+            data-fs-preview-reset=""
+            onClick={() => {
+              setPreviewAnswers({});
+              setPreviewResetCount((count) => count + 1);
+            }}
+          >
+            Start again
+          </button>
+        </Fragment>
+      ) : null}
+    </div>
+  ) : null;
   return (
     <div
       className={className}
@@ -16505,10 +18365,64 @@ function FormStudioBuilderMain(
                 {props.viewerHeaderWidget}{" "}
               </div>
             ) : null}{" "}
+            {!isViewer ? (
+              <div className="rjsf-builder__check" data-fs-check-group="">
+                <button
+                  type="button"
+                  className="rjsf-builder__button"
+                  data-fs-check-button=""
+                  title="Look for problems in this form. Save is never blocked."
+                  onClick={onCheckClick}
+                >
+                  Check
+                </button>
+                {checkActive ? (
+                  designerProblems.length ? (
+                    <Fragment>
+                      <span
+                        className="rjsf-builder__pill rjsf-builder__pill--bad"
+                        role="status"
+                        data-fs-problems-pill="bad"
+                      >
+                        {`${designerProblems.length} problem${
+                          designerProblems.length === 1 ? "" : "s"
+                        }`}
+                      </span>
+                      <button
+                        type="button"
+                        className="rjsf-builder__button rjsf-builder__button--small rjsf-builder__check-step"
+                        aria-label="Previous problem"
+                        data-fs-problem-prev=""
+                        onClick={() => stepDesignerProblem(-1)}
+                      >
+                        &#8249;
+                      </button>
+                      <button
+                        type="button"
+                        className="rjsf-builder__button rjsf-builder__button--small rjsf-builder__check-step"
+                        aria-label="Next problem"
+                        data-fs-problem-next=""
+                        onClick={() => stepDesignerProblem(1)}
+                      >
+                        &#8250;
+                      </button>
+                    </Fragment>
+                  ) : (
+                    <span
+                      className="rjsf-builder__pill rjsf-builder__pill--ok"
+                      role="status"
+                      data-fs-problems-pill="ok"
+                    >
+                      No problems
+                    </span>
+                  )
+                ) : null}
+              </div>
+            ) : null}{" "}
             <button
               type="button"
               className="rjsf-builder__button rjsf-builder__button--primary"
-              onClick={onSaveClick}
+              onClick={isViewer ? onSaveClick : onDesignerSaveClick}
             >
               {" "}
               {clean(props.saveButtonText) || "Save form"}{" "}
@@ -16631,7 +18545,7 @@ function FormStudioBuilderMain(
             props.previewFlow === "continuous"
               ? " rjsf-builder__document-preview--continuous"
               : ""
-          }`}
+          }${stackedPreview ? " rjsf-builder__document-preview--stacked" : ""}`}
         >
           {props.previewFlow === "continuous" && definition.title ? (
             <div className="rjsf-builder__document-preview-heading">
@@ -16641,7 +18555,7 @@ function FormStudioBuilderMain(
           {hasMeaningfulHtml(documentPreviewBodyHtml) ? (
             <div
               className="rjsf-builder__document-preview-body"
-              dangerouslySetInnerHTML={htmlProp(documentPreviewBodyHtml)}
+              dangerouslySetInnerHTML={htmlProp(shownPreviewBodyHtml)}
             />
           ) : (
             <div className="rjsf-builder__document-preview-empty">
@@ -16941,82 +18855,14 @@ function FormStudioBuilderMain(
       ) : builderTab === "preview" ? (
         <section className="rjsf-builder__panel rjsf-builder__panel--preview-full">
           {" "}
-          <div className="rjsf-builder__title">
-            Preview (RJSF renderer)
-          </div>{" "}
+          <div className="rjsf-builder__title">Preview</div>{" "}
+          {canvasHead}{" "}
           <div className="rjsf-builder__help">
             {" "}
-            End-user preview mode using the same RJSF schema/uiSchema output.{" "}
+            End-user preview using the same RJSF schema/uiSchema output. The
+            answers here are only for trying the form out: they are not saved.{" "}
           </div>{" "}
-          <Form
-            schema={schema as any}
-            uiSchema={uiSchema as any}
-            formData={rjsfFormData}
-            validator={validator}
-            idPrefix={instanceIdPrefix}
-            experimental_defaultFormStateBehavior={{
-              constAsDefaults: "skipOneOf"
-            }}
-            formContext={{
-              instanceIdPrefix,
-              componentMetaByKey,
-              previewReorderEnabled: false,
-              previewResizeEnabled: false,
-              onPreviewDropField: undefined,
-              onPreviewMoveComponent: undefined,
-              onPreviewResizeSection: undefined,
-              onPreviewMoveSection: undefined,
-              onPreviewSelectKey: undefined,
-              showSectionBulkToggle: true,
-              showSectionVisibilityToggle: true,
-              previewSectionSettingsEnabled: false,
-              onPreviewUpdateSectionSettings: undefined,
-              sectionSwitchableByKey,
-              sectionVisibilityByKey,
-              onSectionVisibilityChange,
-              systemTemplateSlotRenderers,
-              systemSectionHtmlBySlot,
-              contentBlockTokens: contentBlockTokenValues,
-              selectedPreviewKey: undefined,
-              sectionStatsByKey,
-              wizard: wizardContext,
-              snapToGrid: false,
-              snapToResize: false,
-              labelLayout:
-                definition.builderOptions?.labelLayout === "inline"
-                  ? "inline"
-                  : "block"
-            }}
-            widgets={{
-              date: DateInputWidget,
-                datetime: DateTimeInputWidget,
-              signatureCanvas: SignatureWidget,
-              contentBlock: ContentBlockWidget,
-              systemDatagrid2Placeholder: SystemDatagrid2PlaceholderWidget,
-                scoreTotal: ScoreTotalWidget,
-              numberStepper: NumberStepperWidget,
-              numberScale: NumberScaleWidget,
-                multiSelectDropdown: MultiSelectDropdownWidget,
-                TextareaWidget: StableTextareaWidget
-            }}
-            fields={FORM_FIELDS}
-            templates={FORM_TEMPLATES}
-            liveValidate={formLiveValidate}
-            noHtml5Validate
-            showErrorList={false}
-            transformErrors={transformValidationErrors}
-            onChange={(event: any) =>
-              updateFormData((event?.formData || {}) as JsonObject)
-            }
-          >
-            {" "}
-            <button
-              className="rjsf-builder__hidden-submit"
-              type="submit"
-              tabIndex={-1}
-              aria-hidden="true"
-            />{" "}
-          </Form>{" "}
+          {previewCanvas}{" "}
         </section>
       ) : builderTab === "documentOutput" ? (
         <section className="rjsf-builder__panel rjsf-builder__panel--preview-full">
@@ -17372,9 +19218,15 @@ function FormStudioBuilderMain(
               <section className="rjsf-builder__panel rjsf-builder__panel--preview">
                 {" "}
                 <div className="rjsf-builder__title">Live preview</div>{" "}
+                {canvasHead}{" "}
+                {canvasMode === "preview" ? (
+                  previewCanvas
+                ) : (
+                <Fragment>
                 <div className="rjsf-builder__help">
                   {" "}
-                  Drag ::: to reorder. Drag corner grips to resize fields or
+                  Drag ::: to reorder. Drag a field's right edge to resize it
+                  (third, half or full). Drag section corner grips to resize
                   section columns.{" "}
                 </div>{" "}
                 <label className="rjsf-builder__toggle">
@@ -17392,7 +19244,7 @@ function FormStudioBuilderMain(
                     <span
                       className="rjsf-builder__tooltip-icon"
                       tabIndex={0}
-                      title="Off: every field renders here so you can reach rule-gated ones (marked with an eye badge). On: the canvas hides and shows fields exactly as the runtime will."
+                      title="Off: every field renders here so you can reach rule-gated ones (marked with a Shown when note). On: the canvas hides and shows fields exactly as the runtime will."
                       aria-label="Off: every field renders here so you can reach rule-gated ones. On: the canvas behaves like the runtime."
                     >
                       {" "}
@@ -17427,6 +19279,9 @@ function FormStudioBuilderMain(
                     onPreviewMoveComponent: moveComponentToSection,
                     onPreviewSelectKey,
                     onPreviewFieldAction,
+                    designerInsightsByKey: designerInsights.insightsByKey,
+                    designerShowProblems: checkActive,
+                    designerRelationByKey,
                     showSectionBulkToggle: true,
                     showSectionVisibilityToggle: false,
                     previewSectionSettingsEnabled: true,
@@ -17481,6 +19336,8 @@ function FormStudioBuilderMain(
                     aria-hidden="true"
                   />{" "}
                 </Form>{" "}
+                </Fragment>
+                )}
               </section>
             ) : null}{" "}
             {showRightPanel ? (
@@ -17516,7 +19373,137 @@ function FormStudioBuilderMain(
                     {rightPanelCollapsed ? "<" : ">"}{" "}
                   </button>{" "}
                 </div>{" "}
-                {rightPanelCollapsed ? null : selectedComponent ? (
+                {rightPanelCollapsed ? null : (
+                  <div
+                    className="rjsf-builder__rail-tabs"
+                    role="tablist"
+                    aria-label="Right panel"
+                  >
+                    {(
+                      [
+                        ["properties", "Properties", null],
+                        ["logic", "Logic", designerInsights.logic.length],
+                        [
+                          "problems",
+                          "Problems",
+                          checkActive ? designerProblems.length : null
+                        ]
+                      ] as Array<
+                        [
+                          "properties" | "logic" | "problems",
+                          string,
+                          number | null
+                        ]
+                      >
+                    ).map(([view, title, count]) => (
+                      <button
+                        key={view}
+                        type="button"
+                        role="tab"
+                        aria-selected={railView === view}
+                        data-fs-rail-tab={view}
+                        className={`rjsf-builder__panel-tab rjsf-builder__rail-tab${
+                          railView === view ? " is-active" : ""
+                        }`}
+                        onClick={() => setRailView(view)}
+                      >
+                        {title}
+                        {count !== null ? (
+                          <span className="rjsf-builder__rail-count">
+                            {count}
+                          </span>
+                        ) : null}
+                      </button>
+                    ))}
+                  </div>
+                )}{" "}
+                {rightPanelCollapsed ? null : railView === "logic" ? (
+                  <div className="rjsf-builder__rail-list" data-fs-logic-list="">
+                    {designerInsights.logic.length ? (
+                      <ul className="rjsf-builder__rail-items">
+                        {designerInsights.logic.map((entry) => (
+                          <li key={entry.componentId}>
+                            <button
+                              type="button"
+                              className={`rjsf-builder__rail-item rjsf-builder__rail-item--logic${
+                                selectedComponent?.id === entry.componentId
+                                  ? " is-selected"
+                                  : ""
+                              }`}
+                              data-fs-logic-entry={entry.key}
+                              onClick={() =>
+                                goToDesignerComponent(
+                                  entry.componentId,
+                                  "logic"
+                                )
+                              }
+                            >
+                              <small>{entry.label}</small>
+                              {entry.lines.map((line, index) => (
+                                <span
+                                  key={index}
+                                  className="rjsf-builder__rail-line"
+                                >
+                                  {`${line.joiner} ${line.text}`}
+                                  {line.missing ? (
+                                    <span className="rjsf-builder__rail-missing">
+                                      {" (missing)"}
+                                    </span>
+                                  ) : null}
+                                </span>
+                              ))}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <div className="rjsf-builder__empty">
+                        No visibility rules on this form.
+                      </div>
+                    )}
+                  </div>
+                ) : railView === "problems" ? (
+                  <div
+                    className="rjsf-builder__rail-list"
+                    data-fs-problems-list=""
+                  >
+                    {!checkActive ? (
+                      <div className="rjsf-builder__empty">
+                        Press Check to look for problems.
+                      </div>
+                    ) : designerProblems.length ? (
+                      <ul className="rjsf-builder__rail-items">
+                        {designerProblems.map((problem, index) => (
+                          <li key={`${problem.componentId}-${index}`}>
+                            <button
+                              type="button"
+                              className={`rjsf-builder__rail-item rjsf-builder__rail-item--problem${
+                                problemIndex === index ? " is-selected" : ""
+                              }`}
+                              data-fs-problem-entry={problem.key}
+                              onClick={() => {
+                                setProblemIndex(index);
+                                goToDesignerComponent(
+                                  problem.componentId,
+                                  "problems"
+                                );
+                              }}
+                            >
+                              <small>{problem.label}</small>
+                              <span className="rjsf-builder__rail-line">
+                                {problem.text}
+                              </span>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <div className="rjsf-builder__empty">
+                        No problems. This form is ready to save.
+                      </div>
+                    )}
+                  </div>
+                ) : selectedComponent ? (
                   <div className="rjsf-builder__form">
                     {" "}
                     <div className="rjsf-builder__panel-tabs">
@@ -20202,7 +22189,9 @@ function FormStudioBuilderMain(
                     {isPropertiesTab &&
                     !selectedComponentSharedEntry &&
                     !TOKEN_PREFILL_EXCLUDED_TYPES.has(selectedComponent.type) &&
-                    !selectedComponent.multiSelect &&
+                    (!selectedComponent.multiSelect ||
+                      selectedComponent.type === "select" ||
+                      selectedComponent.type === "radio") &&
                     !selectedComponent.repeatGroup ? (
                       <label className="rjsf-builder__field">
                         {" "}
@@ -21038,6 +23027,53 @@ function FormStudioBuilderMain(
                           />{" "}
                           <span>Required</span>{" "}
                         </label>{" "}
+                      </div>
+                    ) : null}{" "}
+                    {isValidationTab &&
+                    selectedComponent.type !== "systemDatagrid2" ? (
+                      <div className="rjsf-builder__split rjsf-builder__staff-only-setting">
+                        {" "}
+                        <label
+                          className="rjsf-builder__toggle"
+                          title="Staff only: hidden from the client when the client fills in this form"
+                        >
+                          {" "}
+                          <input
+                            type="checkbox"
+                            checked={selectedComponent.staffOnly === true}
+                            onChange={(event) =>
+                              updateDefinition((current) => ({
+                                ...current,
+                                components: current.components.map(
+                                  (component) =>
+                                    component.id === selectedComponent.id ||
+                                    (selectedComponent.repeatGroup?.key &&
+                                      component.repeatGroup?.key ===
+                                        selectedComponent.repeatGroup.key)
+                                      ? {
+                                          ...component,
+                                          staffOnly: event.target.checked
+                                            ? true
+                                            : undefined
+                                        }
+                                      : component
+                                )
+                              }))
+                            }
+                          />{" "}
+                          <span>Staff only</span>{" "}
+                        </label>{" "}
+                        <div className="rjsf-builder__help">
+                          Staff only: hidden from the client when the client
+                          fills in this form.
+                          {selectedComponent.repeatGroup?.key
+                            ? " Applies to the whole repeatable group."
+                            : ""}
+                          {selectedComponent.required &&
+                          selectedComponent.staffOnly === true
+                            ? " Required: staff answer it before they sign."
+                            : ""}
+                        </div>{" "}
                       </div>
                     ) : null}{" "}
                     {isPropertiesTab &&

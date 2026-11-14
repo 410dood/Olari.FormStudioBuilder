@@ -483,6 +483,40 @@
             </actionVariables>
         </property>
 
+        <property key="showMissingRequired" type="expression" required="false">
+            <caption>Show missing required answers</caption>
+            <category>Behavior</category>
+            <description>Viewer fill form only: while this expression is true, every unanswered required question is outlined with "Please answer this question to continue." and the first one is scrolled into view when the expression turns true. A mark clears as soon as its question is answered. Defaults to false.</description>
+            <returnType type="Boolean"/>
+        </property>
+
+        <property key="previewAnswerLayout" type="enumeration" defaultValue="standard">
+            <caption>Preview answer layout</caption>
+            <category>Behavior</category>
+            <description>Viewer document preview only. Standard keeps the document output as it prints. Stacked is for reading on a phone: below 620px the question sits above its answer at full width, an unanswered question reads "Not answered" instead of a dash, and a "Yes" answer gets a tick. Never used for PDF output.</description>
+            <enumerationValues>
+                <enumerationValue key="standard">Standard</enumerationValue>
+                <enumerationValue key="stacked">Stacked on phones</enumerationValue>
+            </enumerationValues>
+        </property>
+
+        <property key="audience" type="enumeration" defaultValue="staff">
+            <caption>Audience</caption>
+            <category>Behavior</category>
+            <description>Viewer only. Staff (default) shows every question; questions marked "Staff only" in the form carry a small marker in the fill form. Client leaves the staff-only questions out of the fill form and of the document preview, does not count them as required or missing, and keeps their stored answers unchanged when the client's answers are saved. Use Client on pages the client reads or fills in.</description>
+            <enumerationValues>
+                <enumerationValue key="staff">Staff</enumerationValue>
+                <enumerationValue key="client">Client</enumerationValue>
+            </enumerationValues>
+        </property>
+
+        <property key="lockClientAnswers" type="expression" required="false">
+            <caption>Lock client answers</caption>
+            <category>Behavior</category>
+            <description>Viewer fill form only: while this expression is true, only questions marked "Staff only" can be edited; every other question is shown locked and keeps its stored answer. For staff answering their questions after the client's answers were submitted. Defaults to false.</description>
+            <returnType type="Boolean"/>
+        </property>
+
         <systemProperty key="Editability" />
     </properties>
 </widget>

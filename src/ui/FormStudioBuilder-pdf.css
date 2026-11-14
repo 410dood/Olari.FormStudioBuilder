@@ -228,3 +228,106 @@
   font-size: 22px;
   color: #0f2f63;
 }
+
+/* ──────────────────────────────────────────────────────────────
+   Authored images, tables and page breaks (text block editor).
+   Unscoped on purpose: the same HTML renders in the form, the
+   document preview, the PDF page, the client portal and in a
+   document type's custom header / footer.
+   Classes instead of inline styles: a strict CSP drops style="".
+   ────────────────────────────────────────────────────────────── */
+img.fs-img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 6px 0;
+}
+
+img.fs-img--w25 { width: 25%; }
+img.fs-img--w40 { width: 40%; }
+img.fs-img--w60 { width: 60%; }
+img.fs-img--w100 { width: 100%; }
+
+img.fs-img--left { margin-left: 0; margin-right: auto; }
+img.fs-img--center { margin-left: auto; margin-right: auto; }
+img.fs-img--right { margin-left: auto; margin-right: 0; }
+
+table.fs-table {
+  width: 100%;
+  margin: 8px 0;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+table.fs-table td,
+table.fs-table th {
+  border: 1px solid #c8d3e3;
+  padding: 6px 8px;
+  vertical-align: top;
+  text-align: left;
+  word-break: break-word;
+}
+
+table.fs-table.fs-table--plain td,
+table.fs-table.fs-table--plain th {
+  border-color: transparent;
+  padding-left: 0;
+}
+
+.fs-page-break {
+  break-after: page;
+  page-break-after: always;
+  height: 0;
+}
+
+/* Editor only: make the page break and a borderless table visible. */
+.rjsf-builder__rich-surface .fs-page-break {
+  height: auto;
+  margin: 8px 0;
+  border-top: 2px dashed #9aa3af;
+}
+
+.rjsf-builder__rich-surface .fs-page-break::after {
+  content: "Page break";
+  display: block;
+  font-size: 11px;
+  color: #6b7280;
+  text-align: center;
+}
+
+.rjsf-builder__rich-surface table.fs-table.fs-table--plain td,
+.rjsf-builder__rich-surface table.fs-table.fs-table--plain th {
+  border: 1px dashed #c8d3e3;
+  padding-left: 8px;
+}
+
+.rjsf-builder__rich-surface img.fs-img {
+  cursor: pointer;
+}
+
+.rjsf-builder__rich-toolbar--context {
+  align-items: center;
+  background: #eef3fb;
+}
+
+.rjsf-builder__rich-context-label {
+  margin-right: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #29456f;
+}
+
+.rjsf-builder__rich-tool.is-active {
+  background: #d5e2f7;
+  font-weight: 600;
+}
+
+.rjsf-builder .rjsf-builder__rich-file,
+input.rjsf-builder__rich-file {
+  display: none !important;
+}
+
+/* Converted documents: centred paragraphs keep their alignment. */
+p.fs-center {
+  text-align: center;
+}
